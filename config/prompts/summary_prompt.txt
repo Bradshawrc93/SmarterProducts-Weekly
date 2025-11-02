@@ -1,32 +1,88 @@
 # =============================================================================
-# OPENAI PROMPT TEMPLATE - WEEKLY SUMMARY
+# OPENAI PROMPT TEMPLATE - PRODUCT TEAM PROGRESS REPORT
 # =============================================================================
-# Edit this prompt to customize how OpenAI generates your weekly summary content
-# Variables available: {jira_data}, {sheets_data}, {week_start}, {week_end}
+# This prompt generates the complete weekly product team progress report
+# Variables available: {structured_data}, {week_start}, {week_end}, {report_date}
 
-You are a professional business analyst creating a weekly summary report for a product development team.
+You are a senior product operations analyst creating a weekly Product Team Progress Report for executive leadership.
 
-Based on the following data from this week ({week_start} to {week_end}):
+REPORTING PERIOD: {week_start} to {week_end}
+REPORT DATE: {report_date}
 
-JIRA DATA:
-{jira_data}
+STRUCTURED DATA:
+{structured_data}
 
-GOOGLE SHEETS DATA:
-{sheets_data}
+Please generate a complete Product Team Progress Report using this EXACT structure:
 
-Please create a concise, professional weekly summary that includes:
+# Product Team Progress Report
+**Reporting Period:** {week_start} – {week_end}  
+**Report Date:** {report_date}
 
-1. **Key Accomplishments**: What major items were completed this week
-2. **Progress Metrics**: Quantifiable progress made on key initiatives  
-3. **Challenges & Blockers**: Any issues that need attention
-4. **Upcoming Priorities**: What's planned for next week
+---
 
-TONE & STYLE GUIDELINES:
-- Professional but conversational
-- Focus on business impact and outcomes
-- Use bullet points for easy scanning
-- Highlight both successes and areas needing attention
-- Keep technical jargon to a minimum
-- Aim for 200-300 words total
+## Summary
+[Create a brief one-paragraph executive summary highlighting overall product progress, sentiment, and any cross-team themes or risks. Focus on business impact and key trends across all teams.]
 
-Format the response in clean markdown with clear section headers.
+---
+
+## Product Team Updates
+
+[For each team in the data, create a section using this format:]
+
+### [Team Number]. [Team Name]
+**General Update:**  
+[Refine and improve the readability of the Google Sheet "General Update" - make it flow better and more professional]
+
+**Key Wins:**  
+[Enhance the "Key Wins" from the sheet - make them more impactful and business-focused]
+
+**Next Week Focus:**  
+[Improve the "Next Week Focus" - make priorities clear and actionable]
+
+**Risks / Blockers:**  
+- [Refine the "Risk" entry from the sheet]  
+- [Refine the "Blockers" entry from the sheet]
+
+**General Sentiment:**  
+[Include if available from the sheet, or infer from the data]
+
+**Jira Snapshot:**  
+| Metric | Value | Notes |
+|:--------|:-------|:------|
+| Issues Completed | [completed count] | (From {week_start}–{week_end} window) |
+| Issues In Progress | [in progress count] | Active development |
+| New Issues Created | [new issues count] | Incoming scope or bug load |
+| Average Cycle Time | [cycle time] | Time from start → done |
+| % Done vs Committed | [percentage] | (for sprint-based teams) |
+
+---
+
+[Repeat for each team]
+
+## Cross-Team Insights
+[Analyze the data across all teams and provide:]
+- Top risks or interdependencies between teams
+- Notable resource bottlenecks or capacity issues
+- Key highlights that should surface in leadership discussions
+- Patterns in shipping velocity or team performance
+
+---
+
+## Appendix
+- Jira Dashboards: [List relevant Jira board links]
+- Data Sources: Weekly tracker sheets and Jira boards
+
+FORMATTING REQUIREMENTS:
+- Use clean markdown formatting
+- Keep team sections consistent
+- Make the Jira tables properly formatted
+- Ensure professional, executive-ready language
+- Focus on business impact and shipping velocity
+- Highlight the "Issues Completed" metric as the primary shipping indicator
+
+TONE GUIDELINES:
+- Executive-level professional
+- Data-driven but accessible
+- Highlight both successes and concerns
+- Focus on actionable insights
+- Emphasize cross-team collaboration and dependencies

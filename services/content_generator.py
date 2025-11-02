@@ -37,81 +37,191 @@ class ContentGenerator:
             raise
     
     def _format_data_for_prompt(self, data: Dict[str, Any]) -> Dict[str, str]:
-        """Format collected data for use in prompts"""
+        """Format collected data into structured format for the new report template"""
         try:
-            # Calculate week dates
+            # Calculate proper date ranges
             today = datetime.now()
-            week_start = (today - timedelta(days=today.weekday())).strftime('%Y-%m-%d')
-            week_end = (today + timedelta(days=6-today.weekday())).strftime('%Y-%m-%d')
             
-            # Format Jira data
-            jira_summary = []
-            if data.get("jira", {}).get("boards"):
-                for board_key, board_data in data["jira"]["boards"].items():
-                    stats = board_data.get("stats", {})
-                    jira_summary.append(f"""
-Board: {board_key}
-- Total Issues: {stats.get('total', 0)}
-- Completed: {stats.get('completed', 0)}
-- In Progress: {stats.get('in_progress', 0)}
-- Blocked: {stats.get('blocked', 0)}
-
-Recent Issues:""")
+            # Previous Monday (data collection period start)
+            days_since_monday = today.weekday()
+            if days_since_monday == 0:  # Today is Monday
+                previous_monday = today - timedelta(days=7)
+            else:
+                previous_monday = today - timedelta(days=days_since_monday + 7)
+            
+            # This Tuesday (data collection period end)
+            this_tuesday = previous_monday + timedelta(days=8)  # Monday + 8 days = next Tuesday
+            
+            # This Wednesday (report date)
+            this_wednesday = previous_monday + timedelta(days=9)  # Monday + 9 days = next Wednesday
+            
+            week_start = previous_monday.strftime('%-m/%-d/%y')
+            week_end = this_tuesday.strftime('%-m/%-d/%y') 
+            report_date = this_wednesday.strftime('%-m/%-d/%y')
+            
+            # Create structured data for the new report format
+            structured_data = {
+                "reporting_period": {
+                    "start_date": week_start,
+                    "end_date": week_end,
+                    "report_date": report_date
+                },
+                "teams": []
+            }
+            
+            # Map Jira boards to teams and combine with Google Sheets data
+            jira_boards = data.get("jira", {}).get("boards", {})
+            sheets_data = data.get("sheets", {}).get("sheets", {})
+            
+            # Create team mapping (assuming board keys match team names)
+            team_counter = 1
+            for board_key, board_data in jira_boards.items():
+                team_info = {
+                    "team_number": team_counter,
+                    "team_name": board_key,
+                    "google_sheet_data": {},
+                    "jira_data": {}
+                }
+                
+                # Extract Jira metrics
+                stats = board_data.get("stats", {})
+                team_info["jira_data"] = {
+                    "issues_completed": stats.get('completed', 0),
+                    "issues_in_progress": stats.get('in_progress', 0),
+                    "new_issues_created": len([issue for issue in board_data.get("issues", []) 
+                                             if self._is_issue_created_in_period(issue, previous_monday, this_tuesday)]),
+                    "total_issues": stats.get('total', 0),
+                    "blocked_issues": stats.get('blocked', 0)
+                }
+                
+                # Try to find matching Google Sheets data
+                # Look for sheet data that might correspond to this team
+                team_sheet_data = self._find_team_sheet_data(board_key, sheets_data)
+                if team_sheet_data:
+                    team_info["google_sheet_data"] = team_sheet_data
+                
+                structured_data["teams"].append(team_info)
+                team_counter += 1
+            
+            # Add any remaining sheet data that didn't match Jira boards
+            for sheet_id, sheet_data in sheets_data.items():
+                sheet_title = sheet_data.get("title", "Unknown Sheet")
+                if not any(team["team_name"].lower() in sheet_title.lower() or 
+                          sheet_title.lower() in team["team_name"].lower() 
+                          for team in structured_data["teams"]):
                     
-                    # Add recent issues (limit to 5 per board)
-                    for issue in board_data.get("issues", [])[:5]:
-                        jira_summary.append(f"  • {issue['key']}: {issue['summary']} ({issue['status']})")
+                    # Add as a separate team
+                    team_info = {
+                        "team_number": team_counter,
+                        "team_name": sheet_title,
+                        "google_sheet_data": self._extract_sheet_team_data(sheet_data),
+                        "jira_data": {
+                            "issues_completed": 0,
+                            "issues_in_progress": 0,
+                            "new_issues_created": 0,
+                            "total_issues": 0,
+                            "blocked_issues": 0
+                        }
+                    }
+                    structured_data["teams"].append(team_info)
+                    team_counter += 1
             
-            jira_formatted = '\n'.join(jira_summary) if jira_summary else "No Jira data available"
-            
-            # Format Sheets data (now handling multiple sheets)
-            sheets_summary = []
-            if data.get("sheets", {}).get("sheets"):
-                for sheet_id, sheet_data in data["sheets"]["sheets"].items():
-                    sheet_title = sheet_data.get("title", "Unknown Sheet")
-                    sheets_summary.append(f"""
-Spreadsheet: {sheet_title}
-- Total Tabs: {sheet_data.get('tab_count', 0)}""")
-                    
-                    # Add data from each tab
-                    for tab_name, tab_data in sheet_data.get("tabs", {}).items():
-                        sheets_summary.append(f"""
-  Tab: {tab_name}
-  - Rows: {tab_data.get('row_count', 0)}
-  - Columns: {tab_data.get('column_count', 0)}
-  - Headers: {', '.join(tab_data.get('headers', [])[:5])}""")
-                        
-                        # Add sample data (first few rows)
-                        if tab_data.get("sample_data"):
-                            sheets_summary.append("  Sample Data:")
-                            for i, row in enumerate(tab_data["sample_data"][:2]):
-                                sheets_summary.append(f"    Row {i+1}: {', '.join(str(cell)[:15] for cell in row[:3])}")
-            
-            sheets_formatted = '\n'.join(sheets_summary) if sheets_summary else "No Google Sheets data available"
+            # Convert to JSON string for the prompt
+            import json
+            structured_json = json.dumps(structured_data, indent=2)
             
             return {
-                "jira_data": jira_formatted,
-                "sheets_data": sheets_formatted,
+                "structured_data": structured_json,
                 "week_start": week_start,
-                "week_end": week_end
+                "week_end": week_end,
+                "report_date": report_date
             }
             
         except Exception as e:
             logger.error(f"Error formatting data for prompt: {e}")
             raise
+
+    def _is_issue_created_in_period(self, issue: Dict, start_date: datetime, end_date: datetime) -> bool:
+        """Check if an issue was created within the reporting period"""
+        try:
+            from dateutil import parser
+            created_date = parser.parse(issue.get('created', ''))
+            return start_date <= created_date <= end_date
+        except:
+            return False
+
+    def _find_team_sheet_data(self, team_name: str, sheets_data: Dict) -> Dict:
+        """Find Google Sheets data that matches a team name"""
+        for sheet_id, sheet_data in sheets_data.items():
+            sheet_title = sheet_data.get("title", "")
+            # Simple matching - look for team name in sheet title or vice versa
+            if (team_name.lower() in sheet_title.lower() or 
+                sheet_title.lower() in team_name.lower() or
+                any(team_name.lower() in tab_name.lower() for tab_name in sheet_data.get("tabs", {}).keys())):
+                return self._extract_sheet_team_data(sheet_data)
+        return {}
+
+    def _extract_sheet_team_data(self, sheet_data: Dict) -> Dict:
+        """Extract team-specific data from a Google Sheet"""
+        team_data = {}
+        
+        # Look through all tabs for team data
+        for tab_name, tab_data in sheet_data.get("tabs", {}).items():
+            headers = tab_data.get("headers", [])
+            rows = tab_data.get("rows", [])
+            
+            if not rows:
+                continue
+            
+            # Map common column names to our expected fields
+            column_mapping = {
+                "general update": "general_update",
+                "general_update": "general_update", 
+                "update": "general_update",
+                "key wins": "key_wins",
+                "key_wins": "key_wins",
+                "wins": "key_wins",
+                "next week focus": "next_week_focus",
+                "next_week_focus": "next_week_focus",
+                "focus": "next_week_focus",
+                "next week": "next_week_focus",
+                "risk": "risk",
+                "risks": "risk",
+                "blockers": "blockers",
+                "blocker": "blockers",
+                "general sentiment": "general_sentiment",
+                "general_sentiment": "general_sentiment",
+                "sentiment": "general_sentiment"
+            }
+            
+            # Create header index mapping
+            header_indices = {}
+            for i, header in enumerate(headers):
+                clean_header = header.lower().strip()
+                if clean_header in column_mapping:
+                    header_indices[column_mapping[clean_header]] = i
+            
+            # Extract data from first row (assuming single team per sheet)
+            if rows and header_indices:
+                first_row = rows[0]
+                for field, index in header_indices.items():
+                    if index < len(first_row):
+                        team_data[field] = first_row[index]
+        
+        return team_data
     
     def generate_summary(self, data: Dict[str, Any], custom_prompt: Optional[str] = None) -> str:
         """
-        Generate weekly summary using OpenAI
+        Generate complete Product Team Progress Report using OpenAI
         
         Args:
             data: Collected data from Jira and Sheets
             custom_prompt: Optional custom prompt override
             
         Returns:
-            Generated summary content
+            Generated complete report content
         """
-        logger.info("Generating weekly summary with OpenAI")
+        logger.info("Generating Product Team Progress Report with OpenAI")
         
         try:
             # Load prompt template or use custom
@@ -120,30 +230,30 @@ Spreadsheet: {sheet_title}
             else:
                 prompt_template = self._load_prompt_template("summary_prompt")
             
-            # Format data for prompt
+            # Format data for prompt (now returns structured JSON)
             formatted_data = self._format_data_for_prompt(data)
             
             # Fill in the template
             prompt = prompt_template.format(**formatted_data)
             
-            # Generate content with OpenAI
+            # Generate content with OpenAI (increased token limit for full report)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a professional business analyst creating weekly reports."},
+                    {"role": "system", "content": "You are a senior product operations analyst creating executive-level weekly reports."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000,
+                max_tokens=3000,  # Increased for full report
                 temperature=0.7
             )
             
             generated_content = response.choices[0].message.content.strip()
             
-            logger.info("Weekly summary generated successfully")
+            logger.info("Product Team Progress Report generated successfully")
             return generated_content
             
         except Exception as e:
-            logger.error(f"Error generating summary: {e}")
+            logger.error(f"Error generating report: {e}")
             raise
     
     def generate_insights(self, data: Dict[str, Any], custom_prompt: Optional[str] = None) -> str:
@@ -239,33 +349,39 @@ Please provide the revised content that maintains all the original information b
     
     def generate_complete_report(self, data: Dict[str, Any]) -> Dict[str, str]:
         """
-        Generate complete report with summary and insights
+        Generate complete Product Team Progress Report
         
         Args:
             data: Collected data from all sources
             
         Returns:
-            Dictionary with generated content sections
+            Dictionary with generated report content
         """
-        logger.info("Generating complete report")
+        logger.info("Generating complete Product Team Progress Report")
         
         try:
-            summary = self.generate_summary(data)
-            insights = self.generate_insights(data)
+            # Generate the complete report using the new structured approach
+            complete_report = self.generate_summary(data)  # This now generates the full report
             
-            # Get current week info
+            # Calculate proper dates for the title
             today = datetime.now()
-            week_start = (today - timedelta(days=today.weekday())).strftime('%B %d, %Y')
-            week_end = (today + timedelta(days=6-today.weekday())).strftime('%B %d, %Y')
+            days_since_monday = today.weekday()
+            if days_since_monday == 0:  # Today is Monday
+                previous_monday = today - timedelta(days=7)
+            else:
+                previous_monday = today - timedelta(days=days_since_monday + 7)
+            
+            this_wednesday = previous_monday + timedelta(days=9)
+            report_date = this_wednesday.strftime('%-m/%-d/%y')
             
             report_content = {
-                "title": f"Weekly Report: {week_start} - {week_end}",
-                "summary": summary,
-                "insights": insights,
+                "title": f"Product Team Progress Report {report_date}",
+                "summary": complete_report,  # The complete report is now in summary
+                "insights": "",  # No longer used - everything is in the main report
                 "generation_timestamp": datetime.now().isoformat()
             }
             
-            logger.info("Complete report generation finished")
+            logger.info("Complete Product Team Progress Report generation finished")
             return report_content
             
         except Exception as e:

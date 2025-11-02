@@ -254,45 +254,17 @@ class DocumentBuilder:
                 })
                 current_index += len(error_instructions)
             
-            # Add summary section
+            # Add the complete report content (now everything is in 'summary')
             if content.get("summary"):
-                summary_header = "## Executive Summary\n\n"
+                # The summary now contains the complete formatted report
+                report_content = f"{content['summary']}\n\n"
                 requests.append({
                     'insertText': {
                         'location': {'index': current_index},
-                        'text': summary_header
+                        'text': report_content
                     }
                 })
-                current_index += len(summary_header)
-                
-                summary_content = f"{content['summary']}\n\n"
-                requests.append({
-                    'insertText': {
-                        'location': {'index': current_index},
-                        'text': summary_content
-                    }
-                })
-                current_index += len(summary_content)
-            
-            # Add insights section
-            if content.get("insights"):
-                insights_header = "## Strategic Insights & Recommendations\n\n"
-                requests.append({
-                    'insertText': {
-                        'location': {'index': current_index},
-                        'text': insights_header
-                    }
-                })
-                current_index += len(insights_header)
-                
-                insights_content = f"{content['insights']}\n\n"
-                requests.append({
-                    'insertText': {
-                        'location': {'index': current_index},
-                        'text': insights_content
-                    }
-                })
-                current_index += len(insights_content)
+                current_index += len(report_content)
             
             # Add raw data section for debugging (if no errors)
             if not content.get("errors") and content.get("raw_data_summary"):
