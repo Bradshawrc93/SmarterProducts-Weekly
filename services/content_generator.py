@@ -64,21 +64,28 @@ Recent Issues:""")
             
             jira_formatted = '\n'.join(jira_summary) if jira_summary else "No Jira data available"
             
-            # Format Sheets data
+            # Format Sheets data (now handling multiple sheets)
             sheets_summary = []
-            if data.get("sheets", {}).get("tabs"):
-                for tab_name, tab_data in data["sheets"]["tabs"].items():
+            if data.get("sheets", {}).get("sheets"):
+                for sheet_id, sheet_data in data["sheets"]["sheets"].items():
+                    sheet_title = sheet_data.get("title", "Unknown Sheet")
                     sheets_summary.append(f"""
-Sheet Tab: {tab_name}
-- Rows: {tab_data.get('row_count', 0)}
-- Columns: {tab_data.get('column_count', 0)}
-- Headers: {', '.join(tab_data.get('headers', [])[:5])}""")
+Spreadsheet: {sheet_title}
+- Total Tabs: {sheet_data.get('tab_count', 0)}""")
                     
-                    # Add sample data (first few rows)
-                    if tab_data.get("rows"):
-                        sheets_summary.append("Sample Data:")
-                        for i, row in enumerate(tab_data["rows"][:3]):
-                            sheets_summary.append(f"  Row {i+1}: {', '.join(str(cell)[:20] for cell in row[:3])}")
+                    # Add data from each tab
+                    for tab_name, tab_data in sheet_data.get("tabs", {}).items():
+                        sheets_summary.append(f"""
+  Tab: {tab_name}
+  - Rows: {tab_data.get('row_count', 0)}
+  - Columns: {tab_data.get('column_count', 0)}
+  - Headers: {', '.join(tab_data.get('headers', [])[:5])}""")
+                        
+                        # Add sample data (first few rows)
+                        if tab_data.get("sample_data"):
+                            sheets_summary.append("  Sample Data:")
+                            for i, row in enumerate(tab_data["sample_data"][:2]):
+                                sheets_summary.append(f"    Row {i+1}: {', '.join(str(cell)[:15] for cell in row[:3])}")
             
             sheets_formatted = '\n'.join(sheets_summary) if sheets_summary else "No Google Sheets data available"
             

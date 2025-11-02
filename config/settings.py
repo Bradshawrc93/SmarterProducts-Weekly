@@ -37,8 +37,9 @@ class Settings(BaseSettings):
     # =============================================================================
     google_credentials: dict = Field(env="GOOGLE_CREDENTIALS")
     google_drive_folder_id: str = Field(env="GOOGLE_DRIVE_FOLDER_ID")
-    google_sheets_id: str = Field(env="GOOGLE_SHEETS_ID")
-    google_sheets_tabs: List[str] = Field(env="GOOGLE_SHEETS_TABS")
+    google_sheets_ids: List[str] = Field(env="GOOGLE_SHEETS_IDS")
+    google_sheets_tab_strategy: str = Field(default="auto", env="GOOGLE_SHEETS_TAB_STRATEGY")
+    google_sheets_tabs: List[str] = Field(default=[], env="GOOGLE_SHEETS_TABS")
     
     @validator('google_credentials', pre=True)
     def parse_google_credentials(cls, v):
@@ -46,10 +47,16 @@ class Settings(BaseSettings):
             return json.loads(v)
         return v
     
+    @validator('google_sheets_ids', pre=True)
+    def parse_google_sheets_ids(cls, v):
+        if isinstance(v, str):
+            return [sheet_id.strip() for sheet_id in v.split(',')]
+        return v
+    
     @validator('google_sheets_tabs', pre=True)
     def parse_google_sheets_tabs(cls, v):
         if isinstance(v, str):
-            return [tab.strip() for tab in v.split(',')]
+            return [tab.strip() for tab in v.split(',') if tab.strip()]
         return v
     
     # =============================================================================
