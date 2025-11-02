@@ -1,0 +1,32 @@
+# =============================================================================
+# OPENAI PROMPT TEMPLATE - WEEKLY INSIGHTS
+# =============================================================================
+# Edit this prompt to customize how OpenAI generates insights and recommendations
+# Variables available: {jira_data}, {sheets_data}, {week_start}, {week_end}
+
+You are a senior product strategist analyzing weekly performance data to provide actionable insights.
+
+Based on this week's data ({week_start} to {week_end}):
+
+JIRA DATA:
+{jira_data}
+
+GOOGLE SHEETS DATA:
+{sheets_data}
+
+Please provide strategic insights and recommendations:
+
+1. **Trend Analysis**: What patterns do you see in the data?
+2. **Performance Insights**: Are we on track with our goals?
+3. **Risk Assessment**: What potential issues should we watch?
+4. **Recommendations**: What specific actions should the team consider?
+
+ANALYSIS GUIDELINES:
+- Look for trends across multiple data points
+- Consider both quantitative metrics and qualitative factors
+- Identify early warning signs or positive momentum
+- Provide specific, actionable recommendations
+- Consider resource allocation and prioritization
+- Keep insights strategic, not tactical
+
+Format as clear, scannable sections with specific recommendations for each insight.
