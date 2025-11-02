@@ -109,19 +109,19 @@ def test_connections():
 
 
 @cli.command()
-def run_preview_generation():
+def generate_weekly_doc():
     """
-    Generate preview report (Tuesday evening job)
-    This command will be executed by Heroku Scheduler
+    Generate Google Doc report (can be run manually or on Tuesday evening)
+    This function only creates the Google Doc - no PDF or email
     """
-    logger.info("🚀 Starting preview report generation...")
+    logger.info("🚀 Starting weekly Google Doc generation...")
     
     state_manager = StateManager()
     
     try:
         # Log job start
         state_manager.log_execution(
-            job_type="preview",
+            job_type="doc_generation",
             status="running",
             details={"start_time": datetime.now().isoformat()}
         )
@@ -131,29 +131,67 @@ def run_preview_generation():
         data_collector = DataCollector()
         collected_data = data_collector.collect_all_data()
         
-        # Validate data
-        if not data_collector.validate_data(collected_data):
-            raise Exception("Data validation failed")
+        # Check for data collection errors
+        errors = []
         
-        logger.info("✅ Data collection completed successfully")
+        # Check Jira data
+        jira_data = collected_data.get("jira", {})
+        if not jira_data.get("boards"):
+            errors.append("❌ No Jira data collected - check board configuration")
         
-        # Step 2: Generate content with AI
-        logger.info("🤖 Generating content with OpenAI...")
-        content_generator = ContentGenerator()
-        report_content = content_generator.generate_complete_report(collected_data)
+        # Check Sheets data
+        sheets_data = collected_data.get("sheets", {})
+        if not sheets_data.get("sheets"):
+            errors.append("❌ No Google Sheets data collected - check sheet IDs and permissions")
+        else:
+            # Check for missing date tabs
+            for sheet_id, sheet_data in sheets_data["sheets"].items():
+                if not sheet_data.get("tabs"):
+                    sheet_title = sheet_data.get("title", "Unknown Sheet")
+                    errors.append(f"❌ No date tab found for '{sheet_title}' - expected tab with previous Monday's date")
         
-        logger.info("✅ Content generation completed successfully")
+        logger.info("✅ Data collection completed")
         
-        # Step 3: Create Google Doc
-        logger.info("📝 Creating Google Doc...")
+        # Step 2: Generate content with AI (only if no critical errors)
+        report_content = {}
+        
+        if not errors:
+            logger.info("🤖 Generating content with OpenAI...")
+            content_generator = ContentGenerator()
+            report_content = content_generator.generate_complete_report(collected_data)
+            logger.info("✅ Content generation completed successfully")
+        else:
+            logger.warning("⚠️ Skipping AI generation due to data collection errors")
+            report_content = {
+                "title": "Weekly Product Team Report - Data Collection Issues",
+                "summary": "Data collection encountered errors. Please review and fix before generating final report.",
+                "insights": "Unable to generate insights due to data collection issues."
+            }
+        
+        # Step 3: Create/Update Google Doc (always, even with errors)
+        logger.info("📝 Creating/updating Google Doc...")
         document_builder = DocumentBuilder()
-        doc_id = document_builder.create_google_doc(report_content)
+        
+        # Add error information to content if there are errors
+        if errors:
+            report_content["errors"] = "\n".join(errors)
+        else:
+            # Add data summary for successful runs
+            report_content["raw_data_summary"] = f"""
+Jira Boards Processed: {len(jira_data.get('boards', {}))}
+Total Jira Issues: {jira_data.get('summary', {}).get('total_issues', 0)}
+Google Sheets Processed: {len(sheets_data.get('sheets', {}))}
+Total Sheet Tabs: {sheets_data.get('summary', {}).get('total_tabs', 0)}
+Total Sheet Rows: {sheets_data.get('summary', {}).get('total_rows', 0)}
+"""
+        
+        doc_id = document_builder.create_or_update_google_doc(report_content)
         doc_url = document_builder.get_document_link(doc_id)
         
-        logger.info(f"✅ Google Doc created: {doc_url}")
+        logger.info(f"✅ Google Doc created/updated: {doc_url}")
         
         # Step 4: Save document info
-        state_manager.save_doc_id(doc_id, doc_url, "preview")
+        state_manager.save_doc_id(doc_id, doc_url, "doc_generation")
         
         # Step 5: Send preview notification
         logger.info("📧 Sending preview notification...")
@@ -166,33 +204,40 @@ def run_preview_generation():
             logger.warning("⚠️ Preview notification failed to send")
         
         # Log successful completion
+        status = "completed_with_errors" if errors else "completed"
         state_manager.log_execution(
-            job_type="preview",
-            status="completed",
+            job_type="doc_generation",
+            status=status,
             details={
                 "end_time": datetime.now().isoformat(),
                 "doc_id": doc_id,
                 "doc_url": doc_url,
                 "notification_sent": notification_sent,
+                "errors_found": len(errors),
+                "errors": errors,
                 "data_summary": {
-                    "jira_boards": len(collected_data.get("jira", {}).get("boards", {})),
-                    "sheets_tabs": len(collected_data.get("sheets", {}).get("tabs", {})),
-                    "total_jira_issues": collected_data.get("jira", {}).get("summary", {}).get("total_issues", 0)
+                    "jira_boards": len(jira_data.get("boards", {})),
+                    "sheets_processed": len(sheets_data.get("sheets", {})),
+                    "total_jira_issues": jira_data.get("summary", {}).get("total_issues", 0)
                 }
             }
         )
         
-        logger.info("🎉 Preview report generation completed successfully!")
+        if errors:
+            logger.warning("⚠️ Google Doc generated with data collection errors - please review and fix")
+        else:
+            logger.info("🎉 Google Doc generation completed successfully!")
+        
         return True
         
     except Exception as e:
-        error_msg = f"Preview generation failed: {e}"
+        error_msg = f"Google Doc generation failed: {e}"
         logger.error(error_msg)
         logger.error(traceback.format_exc())
         
         # Log failure
         state_manager.log_execution(
-            job_type="preview",
+            job_type="doc_generation",
             status="failed",
             error_message=error_msg,
             details={
@@ -207,7 +252,7 @@ def run_preview_generation():
             notification_service.send_error_notification(
                 error=error_msg,
                 context={
-                    "job_type": "preview",
+                    "job_type": "doc_generation",
                     "timestamp": datetime.now().isoformat(),
                     "error_details": str(e)
                 }
@@ -216,6 +261,13 @@ def run_preview_generation():
             logger.error(f"Failed to send error notification: {notification_error}")
         
         return False
+
+@cli.command()
+def run_preview_generation():
+    """
+    Alias for generate_weekly_doc (for backward compatibility)
+    """
+    return generate_weekly_doc()
 
 
 @cli.command()
@@ -236,10 +288,15 @@ def run_final_distribution():
             details={"start_time": datetime.now().isoformat()}
         )
         
-        # Step 1: Get the Google Doc ID from Tuesday's preview
-        logger.info("📄 Retrieving Google Doc from preview generation...")
-        doc_id = state_manager.get_doc_id(job_type="preview")
-        doc_url = state_manager.get_doc_url(job_type="preview")
+        # Step 1: Get the Google Doc ID from doc generation
+        logger.info("📄 Retrieving Google Doc from doc generation...")
+        doc_id = state_manager.get_doc_id(job_type="doc_generation")
+        doc_url = state_manager.get_doc_url(job_type="doc_generation")
+        
+        # Fallback to preview job type for backward compatibility
+        if not doc_id:
+            doc_id = state_manager.get_doc_id(job_type="preview")
+            doc_url = state_manager.get_doc_url(job_type="preview")
         
         if not doc_id:
             raise Exception("No Google Doc found from preview generation. Please run preview generation first.")

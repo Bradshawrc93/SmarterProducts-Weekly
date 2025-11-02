@@ -137,79 +137,133 @@ class DataCollector:
         
         return jira_data
     
+    def _get_previous_monday_date(self) -> str:
+        """
+        Get the date of the previous Monday in MM/DD/YY format
+        
+        Returns:
+            Date string in MM/DD/YY format (e.g., "10/27/25")
+        """
+        from datetime import datetime, timedelta
+        
+        today = datetime.now()
+        
+        # Find the previous Monday
+        # Monday is weekday 0, so we need to go back to the most recent Monday
+        days_since_monday = today.weekday()  # 0=Monday, 1=Tuesday, etc.
+        
+        if days_since_monday == 0:  # Today is Monday
+            # Go back to previous Monday (7 days ago)
+            previous_monday = today - timedelta(days=7)
+        else:
+            # Go back to the most recent Monday
+            previous_monday = today - timedelta(days=days_since_monday + 7)
+        
+        # Format as MM/DD/YY (with leading zeros removed for month/day)
+        formatted_date = previous_monday.strftime("%-m/%-d/%y")
+        
+        logger.info(f"Target date for weekly tabs: {formatted_date} (previous Monday)")
+        return formatted_date
+
+    def _find_date_based_tab(self, spreadsheet, target_date: str) -> Optional[str]:
+        """
+        Find a tab that matches the target date
+        
+        Args:
+            spreadsheet: Google Sheets spreadsheet object
+            target_date: Target date in MM/DD/YY format
+            
+        Returns:
+            Tab name if found, None otherwise
+        """
+        try:
+            all_worksheets = spreadsheet.worksheets()
+            
+            # Try exact match first
+            for worksheet in all_worksheets:
+                tab_name = worksheet.title.strip()
+                if tab_name == target_date:
+                    logger.info(f"Found exact date match: '{tab_name}'")
+                    return tab_name
+            
+            # Try variations with different formatting
+            import re
+            from datetime import datetime
+            
+            # Parse target date to try different formats
+            try:
+                target_dt = datetime.strptime(target_date, "%m/%d/%y")
+                
+                # Generate alternative formats to look for
+                alt_formats = [
+                    target_dt.strftime("%m/%d/%Y"),    # 10/27/2025
+                    target_dt.strftime("%m-%d-%y"),    # 10-27-25
+                    target_dt.strftime("%m-%d-%Y"),    # 10-27-2025
+                    target_dt.strftime("%-m/%-d/%y"),  # 10/27/25 (no leading zeros)
+                    target_dt.strftime("%m/%d/%y"),    # 10/27/25 (with leading zeros)
+                ]
+                
+                for worksheet in all_worksheets:
+                    tab_name = worksheet.title.strip()
+                    if tab_name in alt_formats:
+                        logger.info(f"Found date match with alternative format: '{tab_name}' (target: {target_date})")
+                        return tab_name
+                
+                # Try fuzzy matching - look for tabs that contain the date
+                for worksheet in all_worksheets:
+                    tab_name = worksheet.title.strip()
+                    # Remove common prefixes/suffixes and check if date is contained
+                    clean_tab = re.sub(r'^(week|weekly|report|data)\s*[-_]?\s*', '', tab_name.lower())
+                    clean_tab = re.sub(r'\s*[-_]?\s*(week|weekly|report|data)$', '', clean_tab)
+                    
+                    if target_date in clean_tab or any(alt_format in clean_tab for alt_format in alt_formats):
+                        logger.info(f"Found fuzzy date match: '{tab_name}' (contains target date)")
+                        return tab_name
+                        
+            except ValueError:
+                logger.error(f"Could not parse target date: {target_date}")
+            
+            logger.warning(f"No tab found matching date: {target_date}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding date-based tab: {e}")
+            return None
+
     def _detect_relevant_tabs(self, spreadsheet) -> List[str]:
         """
-        Automatically detect relevant tabs based on content and naming patterns
+        Detect relevant tabs based on date (previous Monday) for weekly tracker sheets
         
         Args:
             spreadsheet: Google Sheets spreadsheet object
             
         Returns:
-            List of relevant tab names
+            List of relevant tab names (should be one tab with the target date)
         """
         try:
-            all_worksheets = spreadsheet.worksheets()
-            relevant_tabs = []
+            # Get the target date (previous Monday)
+            target_date = self._get_previous_monday_date()
             
-            # Keywords that indicate relevant data
-            relevant_keywords = [
-                'metrics', 'kpi', 'data', 'weekly', 'monthly', 'report', 
-                'dashboard', 'summary', 'stats', 'performance', 'issues',
-                'tasks', 'progress', 'status', 'tracking'
-            ]
+            # Try to find the tab with this date
+            date_tab = self._find_date_based_tab(spreadsheet, target_date)
             
-            # Skip common irrelevant tabs
-            skip_keywords = [
-                'template', 'example', 'backup', 'archive', 'old', 'test'
-            ]
-            
-            for worksheet in all_worksheets:
-                tab_name = worksheet.title.lower()
+            if date_tab:
+                logger.info(f"Found weekly tracker tab: '{date_tab}'")
+                return [date_tab]
+            else:
+                # No matching date tab found - this is an error condition
+                logger.error(f"❌ MISSING DATE TAB: Could not find tab for date '{target_date}' in spreadsheet '{spreadsheet.title}'")
                 
-                # Skip if contains skip keywords
-                if any(skip_word in tab_name for skip_word in skip_keywords):
-                    logger.info(f"Skipping tab '{worksheet.title}' (contains skip keyword)")
-                    continue
+                # List available tabs for debugging
+                all_tabs = [ws.title for ws in spreadsheet.worksheets()]
+                logger.error(f"Available tabs in '{spreadsheet.title}': {all_tabs}")
                 
-                # Include if contains relevant keywords
-                if any(keyword in tab_name for keyword in relevant_keywords):
-                    relevant_tabs.append(worksheet.title)
-                    logger.info(f"Including tab '{worksheet.title}' (contains relevant keyword)")
-                    continue
-                
-                # Check if tab has substantial data (more than just headers)
-                try:
-                    # Get first few rows to check for data
-                    sample_data = worksheet.get_all_values()
-                    if len(sample_data) > 2:  # More than just headers
-                        relevant_tabs.append(worksheet.title)
-                        logger.info(f"Including tab '{worksheet.title}' (has substantial data: {len(sample_data)} rows)")
-                    else:
-                        logger.info(f"Skipping tab '{worksheet.title}' (insufficient data: {len(sample_data)} rows)")
-                except Exception as e:
-                    logger.warning(f"Could not analyze tab '{worksheet.title}': {e}")
-            
-            # If no tabs found with keywords, include all non-empty tabs
-            if not relevant_tabs:
-                logger.info("No keyword-matched tabs found, including all non-empty tabs")
-                for worksheet in all_worksheets:
-                    try:
-                        sample_data = worksheet.get_all_values()
-                        if len(sample_data) > 1:  # At least headers + 1 row
-                            relevant_tabs.append(worksheet.title)
-                    except Exception:
-                        continue
-            
-            logger.info(f"Detected relevant tabs: {relevant_tabs}")
-            return relevant_tabs
+                # Return empty list to indicate error
+                return []
             
         except Exception as e:
-            logger.error(f"Error detecting relevant tabs: {e}")
-            # Fallback: return all worksheet names
-            try:
-                return [ws.title for ws in spreadsheet.worksheets()]
-            except:
-                return []
+            logger.error(f"Error detecting date-based tabs: {e}")
+            return []
 
     def collect_sheets_data(self, sheet_ids: Optional[List[str]] = None, tab_strategy: Optional[str] = None) -> Dict[str, Any]:
         """
