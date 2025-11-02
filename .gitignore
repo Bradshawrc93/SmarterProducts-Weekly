@@ -56,6 +56,14 @@ jspm_packages/
 .env.test.local
 .env.production.local
 
+# Configuration files with actual credentials (NEVER COMMIT THESE)
+config.env
+.env.*
+*.env
+config/credentials.json
+google-credentials.json
+secrets.json
+
 # Build outputs
 dist/
 build/

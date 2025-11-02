@@ -96,7 +96,8 @@ class Settings(BaseSettings):
     final_schedule: int = Field(default=8, env="FINAL_SCHEDULE")      # 8 AM
     
     class Config:
-        env_file = ".env"
+        # Try multiple env file locations
+        env_file = [".env", "config.env", ".env.local"]
         case_sensitive = False
 
 
