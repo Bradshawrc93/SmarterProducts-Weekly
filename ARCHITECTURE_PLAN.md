@@ -3,81 +3,55 @@
 ## Project Overview
 
 An automated weekly reporting system that:
-- **Tuesday Night**: Generates preview report for review/editing
-- **Wednesday Morning**: Finalizes and emails PDF report with Google Drive link
+- **Tuesday Night**: Generates Google Doc report for review/editing
+- **Wednesday Morning**: Converts Google Doc to PDF and emails with Drive link
 - **Data Sources**: Multiple Jira boards, Google Sheets (specific tabs)
 - **AI Integration**: OpenAI API for content generation with custom prompts
-- **Output**: PDF report + Google Doc stored in Google Drive
+- **Output**: Editable Google Doc (Tuesday) → PDF report + Google Drive link (Wednesday)
 
-## Architecture Options
+## Workflow Details
 
-### Option 1: Cloud-Native Serverless (Recommended)
+### Tuesday Evening (10 PM)
+1. **Data Collection**: Pull data from Jira boards and Google Sheets
+2. **AI Content Generation**: Use OpenAI to create summaries and insights
+3. **Google Doc Creation**: Generate formatted report in Google Docs
+4. **Preview Notification**: Email you the Google Doc link for review
+5. **State Persistence**: Store document ID for Wednesday's PDF generation
+
+### Wednesday Morning (8 AM)  
+1. **Document Retrieval**: Get the Google Doc ID from Tuesday's run
+2. **PDF Export**: Convert the Google Doc (with any edits you made) to PDF
+3. **Final Distribution**: Email PDF attachment + Google Drive link to recipients
+4. **Completion Logging**: Record successful delivery
+
+## Architecture: Heroku-Based Solution
 
 **Stack:**
-- **Runtime**: Python 3.11+ on AWS Lambda or Google Cloud Functions
-- **Scheduling**: AWS EventBridge or Google Cloud Scheduler
-- **Storage**: AWS S3 or Google Cloud Storage for temp files
-- **Database**: DynamoDB or Firestore for state management
-- **Notifications**: AWS SES or SendGrid for email delivery
+- **Platform**: Heroku (Python buildpack)
+- **Runtime**: Python 3.11+
+- **Scheduling**: Heroku Scheduler add-on
+- **Database**: Heroku Postgres (for state/logging)
+- **Storage**: Google Drive (no local file storage needed)
+- **Email**: SendGrid (Heroku add-on) or Gmail API
+- **Deployment**: GitHub integration with auto-deploy
 
 **Pros:**
-- Cost-effective (pay per execution)
-- Auto-scaling and maintenance-free
-- Excellent integration with Google Workspace
-- Built-in monitoring and logging
-- Easy deployment and updates
+- Simple deployment and scaling
+- Built-in scheduling with Heroku Scheduler
+- Excellent GitHub integration
+- Managed database and add-ons
+- Cost-effective for scheduled tasks
+- Easy environment variable management
 
 **Cons:**
-- Cold start latency
-- Execution time limits (15 min AWS, 60 min GCP)
-- Vendor lock-in
+- Heroku dyno sleep (mitigated by scheduler)
+- Limited to Heroku ecosystem
+- Potential cold starts
 
 **Architecture Flow:**
 ```
-EventBridge/Scheduler → Lambda/Cloud Function → Data Collection → AI Processing → Document Generation → Email/Storage
+GitHub Push → Heroku Deploy → Scheduler Trigger → Data Collection → AI Processing → Google Doc Creation (Tue) → PDF Generation & Email (Wed)
 ```
-
-### Option 2: Containerized Microservices
-
-**Stack:**
-- **Runtime**: Python FastAPI or Node.js Express
-- **Container**: Docker + Kubernetes or Docker Compose
-- **Scheduling**: Kubernetes CronJobs or external cron
-- **Database**: PostgreSQL or MongoDB
-- **Queue**: Redis or RabbitMQ for job processing
-- **Storage**: MinIO or cloud storage
-
-**Pros:**
-- Full control over environment
-- No execution time limits
-- Easy local development
-- Technology flexibility
-- Can handle complex workflows
-
-**Cons:**
-- Higher operational overhead
-- Infrastructure management required
-- Higher costs for always-on services
-
-### Option 3: Hybrid Local + Cloud
-
-**Stack:**
-- **Local Runner**: Python script with cron scheduling
-- **Cloud Services**: Google Drive API, OpenAI API, email service
-- **Storage**: Local file system + Google Drive
-- **Database**: SQLite for local state
-
-**Pros:**
-- Simple setup and debugging
-- Full control over execution
-- Lower cloud costs
-- Easy to modify and test
-
-**Cons:**
-- Requires always-on machine
-- Single point of failure
-- Manual scaling and maintenance
-- Network dependency
 
 ## Recommended Technology Stack
 
@@ -97,24 +71,32 @@ EventBridge/Scheduler → Lambda/Cloud Function → Data Collection → AI Proce
 - **Configuration**: Pydantic for settings management
 - **Logging**: structlog for structured logging
 - **Error Handling**: Sentry for error tracking
-- **Secrets**: AWS Secrets Manager or Google Secret Manager
+- **Secrets**: Heroku Config Vars for environment variables
 
 ## Data Flow Architecture
 
+### Tuesday Evening Flow (Preview Generation)
 ```mermaid
 graph TD
-    A[Scheduler Trigger] --> B[Data Collection Service]
+    A[Heroku Scheduler - Tuesday 10 PM] --> B[Data Collection Service]
     B --> C[Jira API Calls]
     B --> D[Google Sheets API]
-    C --> E[Data Processor]
+    C --> E[Data Processor & Validator]
     D --> E
     E --> F[OpenAI Content Generator]
-    F --> G[Document Builder]
-    G --> H[Google Drive Upload]
-    G --> I[PDF Generator]
-    I --> J[Email Service]
-    H --> K[Preview Mode: Notification]
-    J --> L[Final Mode: Email with PDF]
+    F --> G[Google Doc Builder]
+    G --> H[Create/Update Google Doc]
+    H --> I[Send Preview Notification Email]
+    I --> J[Log Status to Postgres]
+```
+
+### Wednesday Morning Flow (PDF Distribution)
+```mermaid
+graph TD
+    A[Heroku Scheduler - Wednesday 8 AM] --> B[Retrieve Google Doc ID]
+    B --> C[Generate PDF from Google Doc]
+    C --> D[Email PDF + Doc Link]
+    D --> E[Log Final Status to Postgres]
 ```
 
 ## Component Breakdown
@@ -138,16 +120,26 @@ class ContentGenerator:
 ### 3. Document Builder
 ```python
 class DocumentBuilder:
-    - create_google_doc(content: Dict) -> str  # Returns doc_id
-    - generate_pdf(doc_id: str) -> bytes
+    - create_google_doc(content: Dict, folder_id: str) -> str  # Returns doc_id
+    - update_google_doc(doc_id: str, content: Dict) -> bool
+    - export_doc_as_pdf(doc_id: str) -> bytes
     - apply_template(data: Dict, template: str) -> str
 ```
 
 ### 4. Notification Service
 ```python
 class NotificationService:
-    - send_preview_notification(doc_link: str) -> bool
-    - send_final_report(pdf_data: bytes, doc_link: str) -> bool
+    - send_preview_notification(doc_link: str, recipients: List[str]) -> bool
+    - send_final_report(pdf_data: bytes, doc_link: str, recipients: List[str]) -> bool
+    - send_error_notification(error: str, context: Dict) -> bool
+```
+
+### 5. State Management
+```python
+class StateManager:
+    - save_doc_id(week: str, doc_id: str) -> bool
+    - get_doc_id(week: str) -> str
+    - log_execution(job_type: str, status: str, details: Dict) -> bool
 ```
 
 ## Configuration Structure
@@ -191,29 +183,63 @@ output:
 - Jira API tokens with minimal permissions
 - Email service authentication
 
-## Deployment Options
+## Heroku Deployment Setup
 
-### Option A: Google Cloud Platform
+### 1. Heroku App Configuration
 ```bash
-# Deploy using Cloud Functions + Cloud Scheduler
-gcloud functions deploy weekly-report-preview --runtime python311
-gcloud functions deploy weekly-report-final --runtime python311
-gcloud scheduler jobs create http preview-job --schedule="0 22 * * 2"
-gcloud scheduler jobs create http final-job --schedule="0 8 * * 3"
+# Create Heroku app
+heroku create smarterproducts-weekly
+
+# Add required add-ons
+heroku addons:create heroku-postgresql:mini
+heroku addons:create sendgrid:starter
+heroku addons:create scheduler:standard
+
+# Configure environment variables
+heroku config:set OPENAI_API_KEY=your_key
+heroku config:set GOOGLE_CREDENTIALS=your_service_account_json
+heroku config:set JIRA_API_TOKEN=your_token
+heroku config:set JIRA_BASE_URL=https://your-domain.atlassian.net
 ```
 
-### Option B: AWS
+### 2. GitHub Integration
 ```bash
-# Deploy using SAM or Serverless Framework
-sam deploy --template-file template.yaml
-aws events put-rule --schedule-expression "cron(0 22 ? * TUE *)"
+# Connect to GitHub (via Heroku Dashboard or CLI)
+heroku git:remote -a smarterproducts-weekly
+
+# Enable automatic deploys from main branch
+# (Configure in Heroku Dashboard: Deploy > GitHub > Enable Automatic Deploys)
 ```
 
-### Option C: Local with Docker
+### 3. Scheduler Configuration
 ```bash
-# Run locally with cron scheduling
-docker-compose up -d
-# Cron jobs configured in container
+# Add scheduled jobs via Heroku CLI or Dashboard
+heroku addons:open scheduler
+
+# Tuesday Preview Job: "0 22 * * 2" (10 PM Tuesday)
+python manage.py run_preview_generation
+
+# Wednesday Final Job: "0 8 * * 3" (8 AM Wednesday)  
+python manage.py run_final_distribution
+```
+
+### 4. Required Files Structure
+```
+├── Procfile                 # Heroku process definition
+├── requirements.txt         # Python dependencies
+├── runtime.txt             # Python version specification
+├── app.py                  # Main Flask/FastAPI app
+├── manage.py               # CLI commands for scheduled tasks
+├── config/
+│   ├── settings.py         # Environment-based configuration
+│   └── prompts/            # OpenAI prompt templates
+├── services/
+│   ├── data_collector.py   # Jira & Sheets integration
+│   ├── content_generator.py # OpenAI integration
+│   ├── document_builder.py # Google Docs/PDF
+│   └── notification.py     # Email service
+└── models/
+    └── state.py            # Database models
 ```
 
 ## Development Phases
