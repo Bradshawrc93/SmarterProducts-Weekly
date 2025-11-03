@@ -47,7 +47,7 @@ Brief one-paragraph overview highlighting overall product progress, sentiment, a
 |:--------|:-------|:------|
 | Issues Completed | {{Jira completed issues count}} | (From previous Mon–Tues window) |
 | Issues In Progress | {{Jira in-progress count}} | Active development |
-| New Issues Created | {{Jira new issues count}} | Incoming scope or bug load |
+| New Issues Created | {{Jira new issues count}} | Incoming scope or work items |
 | Average Cycle Time | {{Jira metric}} | Time from start → done |
 | % Done vs Committed | {{Jira metric}} | (for sprint-based teams) |
 
@@ -157,7 +157,7 @@ OpenAI should return:
 |:--------|:-------|:------|
 | Issues Completed | 8 | (From 10/27–11/4 window) |
 | Issues In Progress | 12 | Active development |
-| New Issues Created | 5 | Incoming scope or bug load |
+| New Issues Created | 5 | Incoming scope or work items |
 | Average Cycle Time | 4.2 days | Time from start → done |
 | % Done vs Committed | 85% | (for sprint-based teams) |
 ```

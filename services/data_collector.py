@@ -2,6 +2,7 @@
 Data Collection Service - Jira and Google Sheets Integration
 """
 import logging
+import re
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import gspread
@@ -60,6 +61,26 @@ class DataCollector:
         
         logger.info(f"Collecting Jira data from boards: {boards}")
         
+        # Calculate date ranges for current and previous week
+        today = datetime.now()
+        days_since_monday = today.weekday()
+        
+        # Current week: Last Monday to this Tuesday
+        if days_since_monday == 0:  # Today is Monday
+            current_week_start = today - timedelta(days=7)
+        else:
+            this_monday = today - timedelta(days=days_since_monday)
+            current_week_start = this_monday - timedelta(days=7)
+        
+        current_week_end = current_week_start + timedelta(days=8)  # Last Monday + 8 days = this Tuesday
+        
+        # Previous week: 14 days ago Monday to 7 days ago Tuesday
+        previous_week_start = current_week_start - timedelta(days=7)
+        previous_week_end = current_week_start  # Previous week ends when current week starts
+        
+        logger.info(f"Current week: {current_week_start.strftime('%Y-%m-%d')} to {current_week_end.strftime('%Y-%m-%d')}")
+        logger.info(f"Previous week: {previous_week_start.strftime('%Y-%m-%d')} to {previous_week_end.strftime('%Y-%m-%d')}")
+        
         jira_data = {
             "boards": {},
             "summary": {
@@ -68,25 +89,33 @@ class DataCollector:
                 "in_progress_issues": 0,
                 "blocked_issues": 0
             },
-            "collection_timestamp": datetime.now().isoformat()
+            "collection_timestamp": datetime.now().isoformat(),
+            "date_ranges": {
+                "current_week_start": current_week_start.strftime('%Y-%m-%d'),
+                "current_week_end": current_week_end.strftime('%Y-%m-%d'),
+                "previous_week_start": previous_week_start.strftime('%Y-%m-%d'),
+                "previous_week_end": previous_week_end.strftime('%Y-%m-%d')
+            }
         }
         
         try:
             for board_key in boards:
                 logger.info(f"Processing board: {board_key}")
                 
-                # Get issues from the last week
-                week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+                # Get issues from current week (updated in the period)
+                current_week_start_str = current_week_start.strftime('%Y-%m-%d')
+                current_week_end_str = current_week_end.strftime('%Y-%m-%d')
                 
-                # JQL query to get recent issues
-                jql = f"""
+                # JQL query to get recent issues updated in current week
+                jql_current = f"""
                 project = {board_key} 
-                AND updated >= "{week_ago}"
+                AND updated >= "{current_week_start_str}"
+                AND updated <= "{current_week_end_str}"
                 ORDER BY updated DESC
                 """
                 
                 issues = self.jira_client.search_issues(
-                    jql, 
+                    jql_current, 
                     maxResults=100,
                     fields='summary,description,status,assignee,priority,updated,created'
                 )
@@ -98,8 +127,48 @@ class DataCollector:
                         "completed": 0,
                         "in_progress": 0,
                         "blocked": 0
-                    }
+                    },
+                    "previous_week_completed": 0
                 }
+                
+                # Get previous week's completed issues for velocity comparison
+                previous_week_start_str = previous_week_start.strftime('%Y-%m-%d')
+                previous_week_end_str = previous_week_end.strftime('%Y-%m-%d')
+                
+                jql_previous = f"""
+                project = {board_key}
+                AND status in (Done, Completed, Closed, Resolved)
+                AND status CHANGED TO (Done, Completed, Closed, Resolved) DURING ("{previous_week_start_str}", "{previous_week_end_str}")
+                """
+                
+                try:
+                    previous_week_issues = self.jira_client.search_issues(
+                        jql_previous,
+                        maxResults=200,
+                        fields='status'
+                    )
+                    board_data["previous_week_completed"] = len(previous_week_issues)
+                    logger.info(f"Previous week completed issues for {board_key}: {len(previous_week_issues)}")
+                except Exception as e:
+                    logger.warning(f"Could not fetch previous week data for {board_key}: {e}")
+                    # Fallback: try a simpler query
+                    try:
+                        jql_previous_simple = f"""
+                        project = {board_key}
+                        AND status in (Done, Completed, Closed, Resolved)
+                        AND updated >= "{previous_week_start_str}"
+                        AND updated <= "{previous_week_end_str}"
+                        """
+                        previous_week_issues = self.jira_client.search_issues(
+                            jql_previous_simple,
+                            maxResults=200,
+                            fields='status'
+                        )
+                        board_data["previous_week_completed"] = len(previous_week_issues)
+                        logger.info(f"Previous week completed (fallback) for {board_key}: {len(previous_week_issues)}")
+                    except Exception as e2:
+                        logger.warning(f"Fallback query also failed for {board_key}: {e2}")
+                        board_data["previous_week_completed"] = 0
                 
                 for issue in issues:
                     # Get description, handling cases where it might be None
@@ -137,7 +206,7 @@ class DataCollector:
                 jira_data["boards"][board_key] = board_data
                 jira_data["summary"]["total_issues"] += len(issues)
                 
-                logger.info(f"Collected {len(issues)} issues from {board_key}")
+                logger.info(f"Collected {len(issues)} issues from {board_key} (current week completed: {board_data['stats']['completed']}, previous week: {board_data['previous_week_completed']})")
         
         except Exception as e:
             logger.error(f"Error collecting Jira data: {e}")
@@ -195,9 +264,6 @@ class DataCollector:
                     return worksheet.title  # Return original title to preserve formatting
             
             # Try variations with different formatting
-            import re
-            from datetime import datetime
-            
             # Parse target date to try different formats
             try:
                 target_dt = datetime.strptime(target_date, "%m/%d/%y")

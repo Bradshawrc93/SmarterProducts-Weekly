@@ -2,9 +2,11 @@
 Document Builder Service - Google Docs and PDF Generation
 """
 import logging
+import re
 from typing import Dict, Any, Optional
 from datetime import datetime
 import io
+import time
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.service_account import Credentials
@@ -25,7 +27,7 @@ class DocumentBuilder:
         """Initialize Google Docs and Drive services with OAuth support"""
         try:
             # Check if OAuth is configured for document creation
-            import os
+            import os  # Imported here to avoid top-level dependency
             if (os.path.exists('token.json') and 
                 getattr(settings, 'use_oauth_for_docs', False)):
                 
@@ -197,22 +199,26 @@ class DocumentBuilder:
                             total_length += len(text_run['textRun'].get('content', ''))
             
             if total_length > 1:
-                # Clear existing content
-                requests = [{
-                    'deleteContentRange': {
-                        'range': {
-                            'startIndex': 1,
-                            'endIndex': total_length - 1
+                # Clear existing content (but keep the first character to preserve document structure)
+                delete_end = total_length - 1
+                if delete_end > 1:
+                    requests = [{
+                        'deleteContentRange': {
+                            'range': {
+                                'startIndex': 1,
+                                'endIndex': delete_end
+                            }
                         }
-                    }
-                }]
-                
-                self.docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={'requests': requests}
-                ).execute()
-                
-                logger.info("Cleared existing document content")
+                    }]
+                    
+                    self.docs_service.documents().batchUpdate(
+                        documentId=doc_id,
+                        body={'requests': requests}
+                    ).execute()
+                    
+                    logger.info("Cleared existing document content")
+                else:
+                    logger.info("Document already empty or nearly empty")
             
         except Exception as e:
             logger.error(f"Error clearing document content: {e}")
@@ -233,16 +239,19 @@ class DocumentBuilder:
                 }
             })
             
-            # Add generation timestamp
+            # Add generation timestamp (insert after title and newlines)
             timestamp = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+            timestamp_text = f"Generated on: {timestamp}\n\n"
+            title_length = len(title) + 2  # title + 2 newlines
             requests.append({
                 'insertText': {
-                    'location': {'index': len(title) + 3},
-                    'text': f"Generated on: {timestamp}\n\n"
+                    'location': {'index': title_length},
+                    'text': timestamp_text
                 }
             })
             
-            current_index = len(title) + len(timestamp) + 7
+            # Calculate current index: title + newlines + timestamp + newlines
+            current_index = title_length + len(timestamp_text)
             
             # Add errors section if there are any data collection issues
             if content.get("errors"):
@@ -274,22 +283,63 @@ class DocumentBuilder:
                 current_index += len(error_instructions)
             
             # Add the complete report content (now everything is in 'summary')
+            post_table_formatting_data = None
             if content.get("summary"):
                 # Parse markdown and apply proper formatting
                 markdown_content = content['summary']
-                text_content, formatting_requests = self._parse_markdown_to_docs_format(markdown_content, current_index)
+                text_content, formatting_requests, table_ranges = self._parse_markdown_to_docs_format(markdown_content, current_index)
+                
+                # Insert text content (tables are included as formatted text)
+                content_start_index = current_index
                 requests.append({
                     'insertText': {
                         'location': {'index': current_index},
                         'text': text_content
                     }
                 })
-                # Add formatting requests after text insertion
-                requests.extend(formatting_requests)
                 current_index += len(text_content)
+                
+                # Apply formatting requests
+                requests.extend(formatting_requests)
+                
+                # Ensure all "Team:" headers are properly formatted as Heading 2
+                team_header_pattern = re.compile(r'^Team:\s+[^\n]+', re.MULTILINE)
+                team_header_matches = list(team_header_pattern.finditer(text_content))
+                
+                for match in team_header_matches:
+                    match_text = match.group(0)
+                    # Only format if it doesn't contain a number after "Team"
+                    if not re.search(r'Team\s+\d+:', match_text):
+                        header_start_abs = content_start_index + match.start()
+                        # Include until newline or end of line
+                        line_end = text_content.find('\n', match.end())
+                        if line_end == -1:
+                            header_end_abs = content_start_index + match.end()
+                        else:
+                            header_end_abs = content_start_index + line_end
+                        
+                        # Check if this isn't already in formatting_requests
+                        already_formatted = any(
+                            req.get('updateParagraphStyle', {}).get('range', {}).get('startIndex') == header_start_abs
+                            for req in formatting_requests
+                        )
+                        
+                        if not already_formatted:
+                            requests.append({
+                                'updateParagraphStyle': {
+                                    'range': {
+                                        'startIndex': header_start_abs,
+                                        'endIndex': header_end_abs
+                                    },
+                                    'paragraphStyle': {
+                                        'namedStyleType': 'HEADING_2'
+                                    },
+                                    'fields': 'namedStyleType'
+                                }
+                            })
             
             # Add footer
-            footer = "---\n\nThis report was automatically generated by the SmarterProducts Weekly system.\nFeel free to edit this document before the final distribution.\n"
+            footer = "---\n\nThis report was automatically generated by the SmarterProducts Weekly system.\n"
             requests.append({
                 'insertText': {
                     'location': {'index': current_index},
@@ -300,7 +350,7 @@ class DocumentBuilder:
             # Apply formatting
             self._add_formatting_requests(requests, title, len(title) + 3)
             
-            # Execute all requests
+            # Execute all requests (phase 1: insert text, tables, basic formatting)
             if requests:
                 self.docs_service.documents().batchUpdate(
                     documentId=doc_id,
@@ -309,9 +359,356 @@ class DocumentBuilder:
                 
                 logger.info("Document content populated successfully")
             
+            # Create and populate tables if we have any
+            if table_ranges and len(table_ranges) > 0:
+                logger.info(f"Creating and populating {len(table_ranges)} tables...")
+                self._create_and_populate_tables(doc_id, table_ranges)
+            
         except Exception as e:
             logger.error(f"Error populating document: {e}")
             raise
+    
+    def _create_and_populate_tables(self, doc_id: str, table_insertion_info: list):
+        """
+        Create tables and populate cells with content
+        
+        Args:
+            doc_id: Document ID
+            table_insertion_info: List of table info dicts with insert_index, table_data, num_rows, num_cols
+        """
+        try:
+            if not table_insertion_info:
+                logger.info("No tables to create")
+                return
+            
+            logger.info(f"Creating {len(table_insertion_info)} tables...")
+            
+            # First, create all table structures
+            # Process in reverse order to avoid index shifting
+            for table_idx in range(len(table_insertion_info) - 1, -1, -1):
+                table_info = table_insertion_info[table_idx]
+                table_data = table_info['table_data']
+                insert_index = table_info['insert_index']
+                num_rows = len(table_data)
+                num_cols = len(table_data[0]) if table_data else 0
+                
+                logger.info(f"Creating table {table_idx + 1}: {num_rows} rows x {num_cols} cols at index {insert_index}")
+                
+                # Find and delete placeholder first
+                doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                body = doc.get('body', {})
+                content = body.get('content', [])
+                
+                placeholder_found = False
+                for element in content:
+                    if 'paragraph' in element:
+                        para = element['paragraph']
+                        para_start = element.get('startIndex')
+                        para_end = element.get('endIndex')
+                        
+                        # Check if this paragraph contains our placeholder
+                        para_text = ''
+                        for elem in para.get('elements', []):
+                            if 'textRun' in elem:
+                                para_text += elem['textRun'].get('content', '')
+                        
+                        if '[TABLE PLACEHOLDER]' in para_text:
+                            # Delete the placeholder
+                            self.docs_service.documents().batchUpdate(
+                                documentId=doc_id,
+                                body={'requests': [{
+                                    'deleteContentRange': {
+                                        'range': {
+                                            'startIndex': para_start,
+                                            'endIndex': para_end - 1
+                                        }
+                                    }
+                                }]}
+                            ).execute()
+                            placeholder_found = True
+                            break
+                
+                if placeholder_found:
+                    # Create table at the placeholder location (now deleted)
+                    self.docs_service.documents().batchUpdate(
+                        documentId=doc_id,
+                        body={'requests': [{
+                            'insertTable': {
+                                'location': {'index': para_start + 1},
+                                'rows': num_rows,
+                                'columns': num_cols
+                            }
+                        }]}
+                    ).execute()
+            
+            # Now populate all tables
+            logger.info("Populating table cells...")
+            for table_idx, table_info in enumerate(table_insertion_info):
+                table_data = table_info['table_data']
+                logger.info(f"Processing table {table_idx + 1}: {len(table_data)} rows, {len(table_data[0]) if table_data else 0} cols")
+                
+                # Add small delay between tables to avoid rate limits
+                if table_idx > 0:
+                    time.sleep(2)  # Wait 2 seconds between tables
+                
+                # Process each cell one at a time to avoid index shifting issues
+                total_cells = 0
+                num_cols = len(table_data[0]) if table_data else 0
+                for row_idx in range(len(table_data)):
+                    row_data = table_data[row_idx]
+                    for col_idx in range(num_cols):
+                        if col_idx >= len(row_data):
+                            cell_text = ""
+                        else:
+                            cell_text = str(row_data[col_idx]) if row_data[col_idx] is not None else ""
+                        
+                        # Re-read document to get current indices (they shift after each insertion)
+                        doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                        
+                        # Find this specific cell again - iterate through all tables to find the right one
+                        cell_found = False
+                        table_count = 0
+                        for element in doc.get('body', {}).get('content', []):
+                            if 'table' in element:
+                                # Check if this is our target table
+                                if table_count == table_idx:
+                                    table_elem = element.get('table', {})
+                                    for r_idx, r in enumerate(table_elem.get('tableRows', [])):
+                                        for c_idx, c in enumerate(r.get('tableCells', [])):
+                                            # Check if this is our target cell
+                                            if r_idx == row_idx and c_idx == col_idx:
+                                                # Found our cell - get current startIndex and insert
+                                                for content_item in c.get('content', []):
+                                                    if 'paragraph' in content_item:
+                                                        para = content_item['paragraph']
+                                                        for para_element in para.get('elements', []):
+                                                            if 'textRun' in para_element:
+                                                                current_start = para_element.get('startIndex')
+                                                                if current_start is not None:
+                                                                    # Insert text at current startIndex
+                                                                    self.docs_service.documents().batchUpdate(
+                                                                        documentId=doc_id,
+                                                                        body={'requests': [{
+                                                                            'insertText': {
+                                                                                'location': {'index': current_start},
+                                                                                'text': cell_text
+                                                                            }
+                                                                        }]}
+                                                                    ).execute()
+                                                                    
+                                                                    # Format header row as bold
+                                                                    if row_idx == 0 and cell_text:
+                                                                        self.docs_service.documents().batchUpdate(
+                                                                            documentId=doc_id,
+                                                                            body={'requests': [{
+                                                                                'updateTextStyle': {
+                                                                                    'range': {
+                                                                                        'startIndex': current_start,
+                                                                                        'endIndex': current_start + len(cell_text)
+                                                                                    },
+                                                                                    'textStyle': {
+                                                                                        'bold': True
+                                                                                    },
+                                                                                    'fields': 'bold'
+                                                                                }
+                                                                            }]}
+                                                                        ).execute()
+                                                                    
+                                                                    total_cells += 1
+                                                                    cell_found = True
+                                                                    time.sleep(0.1)  # Small delay to avoid rate limits
+                                                                    break
+                                                        if cell_found:
+                                                            break
+                                                break
+                                        if cell_found:
+                                            break
+                                    if cell_found:
+                                        break
+                                table_count += 1
+                        
+                        if not cell_found:
+                            logger.warning(f"Table {table_idx + 1}, Row {row_idx}, Col {col_idx}: Could not find cell for insertion")
+                
+                logger.info(f"Successfully populated {total_cells} cells in table {table_idx + 1}")
+        
+        except Exception as e:
+            logger.error(f"Error populating tables: {e}")
+            # Don't raise - allow document to be created even if table formatting fails
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _apply_post_table_formatting(self, doc_id: str, formatting_data: dict):
+        """
+        Apply text formatting (headers, bold) after tables are inserted.
+        This avoids index calculation issues by reading the document fresh
+        and matching text content to find correct positions.
+        
+        Args:
+            doc_id: Document ID
+            formatting_data: Dict with text_content, content_start_index, formatting_requests, team_matches
+        """
+        try:
+            # Get fresh document structure after table insertion
+            doc = self.docs_service.documents().get(documentId=doc_id).execute()
+            body = doc.get('body', {})
+            content = body.get('content', [])
+            
+            # Extract all text from the document with proper index tracking
+            def extract_text_with_indices(elements):
+                """Extract text and track actual indices from document structure"""
+                text_chunks = []  # List of (text, start_index) tuples
+                
+                for element in elements:
+                    if 'paragraph' in element:
+                        para_element = element
+                        para = para_element.get('paragraph', {})
+                        para_start = para_element.get('startIndex', 0)
+                        
+                        para_elements = para.get('elements', [])
+                        for elem in para_elements:
+                            if 'textRun' in elem:
+                                text_run = elem.get('textRun', {})
+                                text_content = text_run.get('content', '')
+                                text_start = elem.get('startIndex', para_start)
+                                if text_content:
+                                    text_chunks.append((text_content, text_start))
+                    elif 'table' in element:
+                        # Tables have their own structure - skip for text extraction
+                        # but note their position
+                        table_start = element.get('startIndex', 0)
+                        # Add a marker for table position
+                        text_chunks.append((f'[TABLE_{table_start}]', table_start))
+                
+                return text_chunks
+            
+            text_chunks = extract_text_with_indices(content)
+            
+            # Build text-to-index mapping
+            doc_text = ''
+            char_to_index = {}  # Maps character position in doc_text to actual doc index
+            
+            current_char = 0
+            for text_chunk, start_index in text_chunks:
+                if not text_chunk.startswith('[TABLE_'):
+                    # Regular text chunk
+                    for i, char in enumerate(text_chunk):
+                        char_to_index[current_char + i] = start_index + i
+                    doc_text += text_chunk
+                    current_char += len(text_chunk)
+                # Skip table markers in doc_text but track them
+            
+            # Find the content section by matching text patterns
+            text_content = formatting_data['text_content']
+            formatting_requests = formatting_data['formatting_requests']
+            team_matches = formatting_data['team_matches']
+            
+            requests = []
+            
+            # Apply formatting requests by finding text in the document
+            for fmt_req in formatting_requests:
+                if 'updateParagraphStyle' in fmt_req:
+                    range_data = fmt_req['updateParagraphStyle'].get('range', {})
+                    # Try to find the text at this range in the original text_content
+                    # and then find it in the actual document
+                    # For now, skip these as they're complex - headers are handled below
+                    continue
+                elif 'updateTextStyle' in fmt_req:
+                    # Apply bold formatting by finding the bold text in document
+                    range_data = fmt_req['updateTextStyle'].get('range', {})
+                    original_start = range_data.get('startIndex', 0)
+                    original_end = range_data.get('endIndex', 0)
+                    
+                    # Find the text at this position in original content
+                    relative_start = original_start - formatting_data['content_start_index']
+                    relative_end = original_end - formatting_data['content_start_index']
+                    
+                    if relative_start >= 0 and relative_end <= len(text_content):
+                        target_text = text_content[relative_start:relative_end]
+                        # Find this text in the actual document (skip table markers)
+                        doc_pos = doc_text.find(target_text)
+                        if doc_pos != -1 and doc_pos + len(target_text) <= len(doc_text):
+                            # Get actual indices from mapping
+                            actual_start = char_to_index.get(doc_pos, doc_pos)
+                            actual_end = char_to_index.get(doc_pos + len(target_text) - 1, doc_pos + len(target_text))
+                            if actual_end <= actual_start:
+                                actual_end = actual_start + len(target_text)
+                            
+                            requests.append({
+                                'updateTextStyle': {
+                                    'range': {
+                                        'startIndex': actual_start,
+                                        'endIndex': actual_end
+                                    },
+                                    'textStyle': {
+                                        'bold': True
+                                    },
+                                    'fields': 'bold'
+                                }
+                            })
+            
+            # Apply Team: header formatting
+            for match in team_matches:
+                match_text = match.group(0)
+                # Find this text in the actual document (skip table markers)
+                doc_pos = doc_text.find(match_text)
+                if doc_pos != -1 and doc_pos + len(match_text) <= len(doc_text):
+                    header_start = char_to_index.get(doc_pos, doc_pos)
+                    header_end = char_to_index.get(doc_pos + len(match_text) - 1, doc_pos + len(match_text))
+                    if header_end <= header_start:
+                        header_end = header_start + len(match_text)
+                    
+                    requests.append({
+                        'updateParagraphStyle': {
+                            'range': {
+                                'startIndex': header_start,
+                                'endIndex': header_end
+                            },
+                            'paragraphStyle': {
+                                'namedStyleType': 'HEADING_2'
+                            },
+                            'fields': 'namedStyleType'
+                        }
+                    })
+            
+            # Apply "## AI Insights" header formatting  
+            ai_insights_pattern = re.compile(r'^AI Insights\s*$', re.MULTILINE)
+            ai_match = ai_insights_pattern.search(text_content)
+            if ai_match:
+                ai_text = ai_match.group(0)
+                doc_pos = doc_text.find(ai_text)
+                if doc_pos != -1 and doc_pos + len(ai_text) <= len(doc_text):
+                    header_start = char_to_index.get(doc_pos, doc_pos)
+                    header_end = char_to_index.get(doc_pos + len(ai_text) - 1, doc_pos + len(ai_text))
+                    if header_end <= header_start:
+                        header_end = header_start + len(ai_text)
+                    
+                    requests.append({
+                        'updateParagraphStyle': {
+                            'range': {
+                                'startIndex': header_start,
+                                'endIndex': header_end
+                            },
+                            'paragraphStyle': {
+                                'namedStyleType': 'HEADING_2'
+                            },
+                            'fields': 'namedStyleType'
+                        }
+                    })
+            
+            # Apply all formatting requests
+            if requests:
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={'requests': requests}
+                ).execute()
+                logger.info(f"Applied post-table formatting: {len(requests)} requests")
+        
+        except Exception as e:
+            logger.error(f"Error applying post-table formatting: {e}")
+            # Don't raise - allow document to be created even if formatting fails
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _parse_markdown_to_docs_format(self, markdown_text: str, base_index: int) -> tuple[str, list]:
         """
@@ -321,21 +718,50 @@ class DocumentBuilder:
         - ## Header -> Header 2 style
         - **Bold** -> Bold text formatting
         - ### Header -> Header 3 style
+        - Markdown tables -> Google Docs tables with borders
         
         Returns:
-            Tuple of (plain_text, formatting_requests)
+            Tuple of (plain_text, formatting_requests, table_requests)
+            Where table_requests is a list of table creation requests
         """
-        import re
-        
         plain_text = ""
         formatting_requests = []
+        table_requests = []
         
         lines = markdown_text.split('\n')
+        i = 0
         
-        for line in lines:
+        while i < len(lines):
+            line = lines[i]
+            
             # Skip horizontal rules (---) - remove them completely
             if re.match(r'^-{3,}\s*$', line.strip()):
+                i += 1
                 continue
+            
+            # Check for markdown tables (lines with pipes and separator row)
+            if '|' in line and i + 1 < len(lines):
+                # Check if next line is a separator (contains dashes and pipes)
+                next_line = lines[i + 1].strip()
+                if re.match(r'^\|[\s\-:|]+\|', next_line):
+                    # Found a table - extract it
+                    table_data, table_lines_consumed = self._extract_table(lines, i)
+                    
+                    if table_data:
+                        # Store table insertion info
+                        table_requests.append({
+                            'insert_index': base_index + len(plain_text),
+                            'table_data': table_data,
+                            'num_rows': len(table_data),
+                            'num_cols': len(table_data[0]) if table_data else 0
+                        })
+                        
+                        # Add placeholder text (will be replaced by table)
+                        placeholder = f"[TABLE PLACEHOLDER]\n"
+                        plain_text += placeholder
+                    
+                    i += table_lines_consumed
+                    continue
             
             # Check for headers (## or ###)
             header_match = re.match(r'^(#{2,3})\s+(.+)', line)
@@ -364,6 +790,7 @@ class DocumentBuilder:
                         'fields': 'namedStyleType'
                     }
                 })
+                i += 1
                 continue
             
             # Process bold text (**text**)
@@ -408,8 +835,102 @@ class DocumentBuilder:
                 plain_text += processed_line
             
             plain_text += "\n"
+            i += 1
         
-        return plain_text, formatting_requests
+        return plain_text, formatting_requests, table_requests
+    
+    def _extract_table(self, lines: list, start_index: int) -> tuple[list, int]:
+        """
+        Extract table data from markdown lines
+        
+        Returns:
+            Tuple of (table_data, lines_consumed)
+            table_data is list of rows, each row is list of cells
+        """
+        table_data = []
+        i = start_index
+        separator_seen = False
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Stop if we hit an empty line after table
+            if not line and separator_seen and table_data:
+                break
+            
+            # Check if it's a table row (contains pipes)
+            if '|' in line:
+                # Parse cells (split by |, strip whitespace, skip empty first/last if they're just delimiters)
+                cells = [cell.strip() for cell in line.split('|')]
+                # Remove empty first/last cells if they're just from leading/trailing pipes
+                if cells and not cells[0]:
+                    cells = cells[1:]
+                if cells and not cells[-1]:
+                    cells = cells[:-1]
+                
+                # Check if this is a separator row
+                if re.match(r'^[\s\-:|]+$', line.replace('|', '')):
+                    separator_seen = True
+                    i += 1
+                    continue
+                
+                # It's a data row
+                if cells:
+                    table_data.append(cells)
+            else:
+                # Not a table row anymore
+                if separator_seen:
+                    break
+            
+            i += 1
+        
+        return table_data, i - start_index
+    
+    def _format_table_as_text(self, table_data: list) -> str:
+        """
+        Format table data as markdown table text with borders
+        
+        Args:
+            table_data: List of rows, each row is a list of cell strings
+            
+        Returns:
+            Formatted markdown table string
+        """
+        if not table_data:
+            return ""
+        
+        # Calculate column widths
+        num_cols = max(len(row) for row in table_data) if table_data else 1
+        col_widths = [0] * num_cols
+        
+        for row in table_data:
+            for col_idx in range(num_cols):
+                cell_text = row[col_idx] if col_idx < len(row) else ""
+                col_widths[col_idx] = max(col_widths[col_idx], len(cell_text))
+        
+        # Format table
+        lines = []
+        
+        for row_idx, row in enumerate(table_data):
+            # Format row cells
+            cells = []
+            for col_idx in range(num_cols):
+                cell_text = row[col_idx] if col_idx < len(row) else ""
+                # Pad cell to column width
+                padded_cell = cell_text.ljust(col_widths[col_idx])
+                cells.append(padded_cell)
+            
+            # Create row with borders
+            row_line = "| " + " | ".join(cells) + " |"
+            lines.append(row_line)
+            
+            # Add separator after header row (first row)
+            if row_idx == 0:
+                separator_cells = ["-" * width for width in col_widths]
+                separator_line = "| " + " | ".join(separator_cells) + " |"
+                lines.append(separator_line)
+        
+        return "\n".join(lines)
     
     def _add_formatting_requests(self, requests: list, title: str, title_end_index: int):
         """Add formatting requests for the document"""

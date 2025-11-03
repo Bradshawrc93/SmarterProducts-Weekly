@@ -2,8 +2,11 @@
 Content Generation Service - OpenAI Integration
 """
 import logging
+import json
+import re
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime, timedelta
+from dateutil import parser
 import openai
 from config.settings import settings
 
@@ -95,6 +98,11 @@ class ContentGenerator:
                 # Extract Jira metrics and issue details
                 stats = board_data.get("stats", {})
                 issues = board_data.get("issues", [])
+                previous_week_completed = board_data.get("previous_week_completed", 0)
+                current_week_completed = stats.get('completed', 0)
+                
+                # Calculate velocity trend
+                velocity_trend = self._calculate_velocity_trend(current_week_completed, previous_week_completed)
                 
                 # Filter issues by status categories
                 completed_issues = [issue for issue in issues 
@@ -110,11 +118,13 @@ class ContentGenerator:
                            if self._is_issue_created_in_period(issue, target_monday, this_tuesday)]
                 
                 team_info["jira_data"] = {
-                    "issues_completed": stats.get('completed', 0),
+                    "issues_completed": current_week_completed,
                     "issues_in_progress": stats.get('in_progress', 0),
                     "new_issues_created": len(new_issues),
                     "total_issues": stats.get('total', 0),
                     "blocked_issues": stats.get('blocked', 0),
+                    "previous_week_completed": previous_week_completed,
+                    "velocity_trend": velocity_trend,  # "up", "down", or "similar"
                     # Include actual issue details for context (limit to top issues to manage token usage)
                     "completed_issues_detail": [
                         {
@@ -211,7 +221,9 @@ class ContentGenerator:
                             "issues_in_progress": 0,
                             "new_issues_created": 0,
                             "total_issues": 0,
-                            "blocked_issues": 0
+                            "blocked_issues": 0,
+                            "previous_week_completed": 0,
+                            "velocity_trend": "similar"  # No data to compare
                         }
                     }
                     structured_data["teams"].append(team_info)
@@ -226,7 +238,6 @@ class ContentGenerator:
                 team["team_number"] = i
             
             # Convert to JSON string for the prompt
-            import json
             structured_json = json.dumps(structured_data, indent=2)
             
             return {
@@ -263,10 +274,38 @@ class ContentGenerator:
         
         return sorted(teams, key=get_sort_key)
     
+    def _calculate_velocity_trend(self, current: int, previous: int) -> str:
+        """
+        Calculate velocity trend based on current vs previous week completed issues
+        
+        Args:
+            current: Current week completed issues count
+            previous: Previous week completed issues count
+            
+        Returns:
+            "up", "down", or "similar"
+        """
+        if previous == 0:
+            # If no previous data, consider it "similar" (no change)
+            if current == 0:
+                return "similar"
+            else:
+                return "up"  # Any completion is improvement from zero
+        
+        # Calculate percentage change
+        change_percent = ((current - previous) / previous) * 100
+        
+        # Thresholds: >20% increase = up, >20% decrease = down, otherwise similar
+        if change_percent > 20:
+            return "up"
+        elif change_percent < -20:
+            return "down"
+        else:
+            return "similar"
+    
     def _is_issue_created_in_period(self, issue: Dict, start_date: datetime, end_date: datetime) -> bool:
         """Check if an issue was created within the reporting period"""
         try:
-            from dateutil import parser
             created_date = parser.parse(issue.get('created', ''))
             return start_date <= created_date <= end_date
         except:
@@ -285,7 +324,6 @@ class ContentGenerator:
         Returns:
             Clean team name extracted from sheet title
         """
-        import re
         # Remove common suffixes like "Weekly Tracker", "Template", etc.
         # Look for the main product name (typically starts with "Smarter")
         match = re.match(r'^(Smarter[A-Za-z]+)', sheet_title)

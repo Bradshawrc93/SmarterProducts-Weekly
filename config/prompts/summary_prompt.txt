@@ -25,7 +25,13 @@ Please generate a complete Product Team Progress Report using this EXACT structu
 
 [For each team in the data, create a section using this format:]
 
-## [Team Number]. [Team Name]
+## Team: [Team Name]
+
+IMPORTANT: 
+- DO NOT include team numbers (e.g., "Team 1:" or "1. Team:")
+- Use EXACTLY this format: "## Team: [Team Name]" with NO numbers
+- Example: "## Team: SmarterAR" NOT "## Team 1: SmarterAR" or "## 1. Team: SmarterAR"
+- This MUST be a Header 2 format (starts with ##)
 **General Update:**  
 [Refine and improve the readability of the Google Sheet "General Update" - make it flow better and more professional]
 
@@ -42,14 +48,26 @@ Please generate a complete Product Team Progress Report using this EXACT structu
 **General Sentiment:**  
 [Include if available from the sheet, or infer from the data]
 
-**Jira Snapshot:**  
+**Velocity Trend:**  
+[Show velocity trend compared to previous week. Use the velocity_trend field from the data: "up", "down", or "similar". Format it clearly, e.g., "Velocity: ↑ Up from previous week (X issues vs Y issues)" or "Velocity: → Similar to previous week" or "Velocity: ↓ Down from previous week"]
+
+**Jira Metrics Table:**  
+Create a clean table with borders using this format. The table should have clear borders (use markdown table format which automatically includes borders):
+
 | Metric | Value | Notes |
-|:--------|:-------|:------|
-| Issues Completed | [completed count] | (From {week_start}–{week_end} window) |
+|:-------|:------|:------|
+| Issues Completed (This Week) | [completed count] | (From {week_start}–{week_end} window) |
+| Issues Completed (Previous Week) | [previous_week_completed] | For comparison |
 | Issues In Progress | [in progress count] | Active development |
-| New Issues Created | [new issues count] | Incoming scope or bug load |
-| Average Cycle Time | [cycle time] | Time from start → done |
-| % Done vs Committed | [percentage] | (for sprint-based teams) |
+| New Issues Created | [new issues count] | Incoming scope or work items |
+| Blocked Issues | [blocked count] | Issues requiring attention |
+
+IMPORTANT TABLE FORMATTING:
+- Tables must use proper markdown table format with pipes (|) and dashes
+- Each team should have ONE comprehensive table with all metrics
+- Tables should be well-formatted and easy to read
+- Use consistent column widths
+- Include clear headers and alignment
 
 [Repeat for each team]
 
@@ -68,16 +86,25 @@ IMPORTANT: You MUST include this exact header next (use ## for Header 2 formatti
 **Shipping Velocity and Performance Patterns:**
 [Talk about velocity and performance like you're analyzing it with leadership. Use plain language - "Here's the pattern we're seeing..." or "What stands out is..." Include what it means and what we should do about it.]
 
+CRITICAL FORMATTING NOTE:
+- "## AI Insights" MUST be a Header 2 (starts with ##)
+- "**Top Risks and Interdependencies:**", "**Key Highlights for Leadership Discussion:**", and "**Shipping Velocity and Performance Patterns:**" MUST be bold text ONLY (starts with **), NOT headers
+- These subsections are bold labels, not headers - they should use **text** format, not ## format
+
 FORMATTING REQUIREMENTS:
 - Use clean markdown formatting
 - DO NOT use horizontal rules (---) anywhere in the report
 - Keep team sections consistent
-- Make the Jira tables properly formatted
+- CRITICAL: Each team MUST have a well-formatted table with borders using markdown table format
+- Tables should have clear headers (Metric, Value, Notes) and all rows should be properly aligned
+- Include velocity trend information BEFORE each team's table
+- Tables must use proper markdown syntax: pipes (|) for columns, dashes (---) for separators, colons (:) for alignment
 - For AI Insights section: Use bold labels (**Label:**) followed by paragraph-style content, not bullet lists
 - Write in complete, flowing sentences rather than bullet points for analysis sections
 - Ensure professional, executive-ready language
 - Focus on business impact and shipping velocity
 - Highlight the "Issues Completed" metric as the primary shipping indicator
+- DO NOT create graphs or visualizations - use tables only
 
 TONE GUIDELINES:
 - Write like you're having a real conversation with leadership in a meeting
