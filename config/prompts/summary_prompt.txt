@@ -18,18 +18,14 @@ Please generate a complete Product Team Progress Report using this EXACT structu
 **Reporting Period:** {week_start} – {week_end}  
 **Report Date:** {report_date}
 
----
-
 ## Summary
-[Create a brief one-paragraph executive summary highlighting overall product progress, sentiment, and any cross-team themes or risks. Focus on business impact and key trends across all teams.]
-
----
+[Create a brief one-paragraph executive summary highlighting overall product progress, sentiment, and any cross-team themes or risks. Focus on business impact and key trends across all teams. Write like you're actually talking to leadership in a meeting - be direct, honest, and focus on what they need to know.]
 
 ## Product Team Updates
 
 [For each team in the data, create a section using this format:]
 
-### [Team Number]. [Team Name]
+## [Team Number]. [Team Name]
 **General Update:**  
 [Refine and improve the readability of the Google Sheet "General Update" - make it flow better and more professional]
 
@@ -55,34 +51,40 @@ Please generate a complete Product Team Progress Report using this EXACT structu
 | Average Cycle Time | [cycle time] | Time from start → done |
 | % Done vs Committed | [percentage] | (for sprint-based teams) |
 
----
-
 [Repeat for each team]
 
-## Cross-Team Insights
-[Analyze the data across all teams and provide:]
-- Top risks or interdependencies between teams
-- Notable resource bottlenecks or capacity issues
-- Key highlights that should surface in leadership discussions
-- Patterns in shipping velocity or team performance
+IMPORTANT: You MUST include this exact header next (use ## for Header 2 formatting):
 
----
+## AI Insights
 
-## Appendix
-- Jira Dashboards: [List relevant Jira board links]
-- Data Sources: Weekly tracker sheets and Jira boards
+[Write this like you're actually having a conversation with leadership. Be direct, honest, and conversational. Don't use corporate jargon or overly formal language. Say what's really happening and what needs attention. Use bold labels followed by natural, flowing paragraphs that sound like you're explaining things in person.]
+
+**Top Risks and Interdependencies:**
+[Talk about risks and dependencies like you're explaining them in a meeting. Be direct - "Here's what we're seeing..." or "The thing that concerns me is..." Write in natural paragraphs, not bullet lists. Be honest about problems.]
+
+**Key Highlights for Leadership Discussion:**
+[Tell leadership what they actually need to know. Be straightforward - "Here's what's working well..." or "We need to make a decision on..." Focus on what requires their attention or decision-making.]
+
+**Shipping Velocity and Performance Patterns:**
+[Talk about velocity and performance like you're analyzing it with leadership. Use plain language - "Here's the pattern we're seeing..." or "What stands out is..." Include what it means and what we should do about it.]
 
 FORMATTING REQUIREMENTS:
 - Use clean markdown formatting
+- DO NOT use horizontal rules (---) anywhere in the report
 - Keep team sections consistent
 - Make the Jira tables properly formatted
+- For AI Insights section: Use bold labels (**Label:**) followed by paragraph-style content, not bullet lists
+- Write in complete, flowing sentences rather than bullet points for analysis sections
 - Ensure professional, executive-ready language
 - Focus on business impact and shipping velocity
 - Highlight the "Issues Completed" metric as the primary shipping indicator
 
 TONE GUIDELINES:
-- Executive-level professional
-- Data-driven but accessible
-- Highlight both successes and concerns
-- Focus on actionable insights
-- Emphasize cross-team collaboration and dependencies
+- Write like you're having a real conversation with leadership in a meeting
+- Be direct, honest, and conversational - not overly formal or corporate
+- Use natural language that sounds human, not like a formal report
+- Be straightforward about problems and opportunities
+- Avoid jargon, buzzwords, or overly formal language
+- Say what's really happening and what needs to be done
+- Focus on actionable insights and real decisions that need to be made
+- Sound like a real person explaining the situation, not a report generator

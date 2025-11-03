@@ -88,7 +88,7 @@ class DataCollector:
                 issues = self.jira_client.search_issues(
                     jql, 
                     maxResults=100,
-                    fields='summary,status,assignee,priority,updated,created'
+                    fields='summary,description,status,assignee,priority,updated,created'
                 )
                 
                 board_data = {
@@ -102,9 +102,17 @@ class DataCollector:
                 }
                 
                 for issue in issues:
+                    # Get description, handling cases where it might be None
+                    description = ""
+                    if hasattr(issue.fields, 'description') and issue.fields.description:
+                        description = issue.fields.description
+                    elif isinstance(issue.fields.description, str):
+                        description = issue.fields.description
+                    
                     issue_data = {
                         "key": issue.key,
                         "summary": issue.fields.summary,
+                        "description": description,
                         "status": issue.fields.status.name,
                         "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "Unassigned",
                         "priority": issue.fields.priority.name if issue.fields.priority else "None",

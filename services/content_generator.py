@@ -2,7 +2,7 @@
 Content Generation Service - OpenAI Integration
 """
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime, timedelta
 import openai
 from config.settings import settings
@@ -92,22 +92,89 @@ class ContentGenerator:
                     "jira_data": {}
                 }
                 
-                # Extract Jira metrics
+                # Extract Jira metrics and issue details
                 stats = board_data.get("stats", {})
+                issues = board_data.get("issues", [])
+                
+                # Filter issues by status categories
+                completed_issues = [issue for issue in issues 
+                                   if any(word in issue.get('status', '').lower() 
+                                         for word in ['done', 'completed', 'closed', 'resolved'])]
+                in_progress_issues = [issue for issue in issues 
+                                     if any(word in issue.get('status', '').lower() 
+                                           for word in ['progress', 'development', 'review'])]
+                blocked_issues = [issue for issue in issues 
+                                if any(word in issue.get('status', '').lower() 
+                                      for word in ['blocked', 'impediment'])]
+                new_issues = [issue for issue in issues 
+                           if self._is_issue_created_in_period(issue, target_monday, this_tuesday)]
+                
                 team_info["jira_data"] = {
                     "issues_completed": stats.get('completed', 0),
                     "issues_in_progress": stats.get('in_progress', 0),
-                    "new_issues_created": len([issue for issue in board_data.get("issues", []) 
-                                             if self._is_issue_created_in_period(issue, target_monday, this_tuesday)]),
+                    "new_issues_created": len(new_issues),
                     "total_issues": stats.get('total', 0),
-                    "blocked_issues": stats.get('blocked', 0)
+                    "blocked_issues": stats.get('blocked', 0),
+                    # Include actual issue details for context (limit to top issues to manage token usage)
+                    "completed_issues_detail": [
+                        {
+                            "key": issue.get('key'),
+                            "summary": issue.get('summary'),
+                            "description": issue.get('description', '')[:200] if issue.get('description') else '',  # Limit description length
+                            "status": issue.get('status'),
+                            "assignee": issue.get('assignee')
+                        }
+                        for issue in completed_issues[:10]  # Limit to top 10 to avoid token bloat
+                    ],
+                    "in_progress_issues_detail": [
+                        {
+                            "key": issue.get('key'),
+                            "summary": issue.get('summary'),
+                            "description": issue.get('description', '')[:200] if issue.get('description') else '',  # Limit description length
+                            "status": issue.get('status'),
+                            "assignee": issue.get('assignee'),
+                            "priority": issue.get('priority')
+                        }
+                        for issue in in_progress_issues[:10]  # Limit to top 10
+                    ],
+                    "blocked_issues_detail": [
+                        {
+                            "key": issue.get('key'),
+                            "summary": issue.get('summary'),
+                            "description": issue.get('description', '')[:200] if issue.get('description') else '',  # Limit description length
+                            "status": issue.get('status'),
+                            "assignee": issue.get('assignee')
+                        }
+                        for issue in blocked_issues[:10]  # Limit to top 10
+                    ],
+                    "new_issues_detail": [
+                        {
+                            "key": issue.get('key'),
+                            "summary": issue.get('summary'),
+                            "description": issue.get('description', '')[:200] if issue.get('description') else '',  # Limit description length
+                            "status": issue.get('status'),
+                            "assignee": issue.get('assignee')
+                        }
+                        for issue in new_issues[:10]  # Limit to top 10
+                    ]
                 }
                 
                 # Try to find matching Google Sheets data
-                team_sheet_data, matched_sheet_id = self._find_team_sheet_data(board_key, sheets_data)
-                if team_sheet_data and matched_sheet_id:
+                team_sheet_data, matched_sheet_id, extracted_team_name = self._find_team_sheet_data(board_key, sheets_data)
+                if team_sheet_data and matched_sheet_id and extracted_team_name:
                     team_info["google_sheet_data"] = team_sheet_data
+                    team_info["team_name"] = extracted_team_name  # Use team name from sheet instead of board key
                     matched_sheets.add(matched_sheet_id)
+                else:
+                    # If no matching sheet found, try to create a readable name from board key
+                    # Map common board keys to team names
+                    board_key_mapping = {
+                        "SMR": "SmarterPosting",
+                        "SMRTRR": "SmarterAR", 
+                        "SMRTRTH": "SmarterAuth",
+                        "SMRTRCDNG": "SmarterCoding"
+                    }
+                    team_info["team_name"] = board_key_mapping.get(board_key, board_key)
                 
                 structured_data["teams"].append(team_info)
                 team_counter += 1
@@ -120,11 +187,12 @@ class ContentGenerator:
                     continue
                 
                 sheet_title = sheet_data.get("title", "Unknown Sheet")
+                extracted_team_name = self._extract_team_name_from_sheet_title(sheet_title)
                 
-                # Check if we already have a team with this exact sheet title
+                # Check if we already have a team with this exact team name
                 existing_team = next(
                     (team for team in structured_data["teams"] 
-                     if team["team_name"].lower() == sheet_title.lower()),
+                     if team["team_name"].lower() == extracted_team_name.lower()),
                     None
                 )
                 
@@ -133,10 +201,10 @@ class ContentGenerator:
                     if not existing_team.get("google_sheet_data"):
                         existing_team["google_sheet_data"] = self._extract_sheet_team_data(sheet_data)
                 else:
-                    # Add as a new separate team
+                    # Add as a new separate team with extracted team name
                     team_info = {
                         "team_number": team_counter,
-                        "team_name": sheet_title,
+                        "team_name": extracted_team_name,
                         "google_sheet_data": self._extract_sheet_team_data(sheet_data),
                         "jira_data": {
                             "issues_completed": 0,
@@ -148,6 +216,14 @@ class ContentGenerator:
                     }
                     structured_data["teams"].append(team_info)
                     team_counter += 1
+            
+            # Sort teams in desired order
+            team_order = ["SmarterAR", "SmarterCoding", "SmarterAuth", "SmarterPosting"]
+            structured_data["teams"] = self._sort_teams(structured_data["teams"], team_order)
+            
+            # Renumber teams based on sorted order
+            for i, team in enumerate(structured_data["teams"], 1):
+                team["team_number"] = i
             
             # Convert to JSON string for the prompt
             import json
@@ -164,6 +240,29 @@ class ContentGenerator:
             logger.error(f"Error formatting data for prompt: {e}")
             raise
 
+    def _sort_teams(self, teams: List[Dict], desired_order: List[str]) -> List[Dict]:
+        """
+        Sort teams according to a desired order
+        
+        Args:
+            teams: List of team dictionaries
+            desired_order: List of team names in desired order
+            
+        Returns:
+            Sorted list of teams
+        """
+        # Create a mapping of team name to priority (lower number = higher priority)
+        order_map = {team_name: index for index, team_name in enumerate(desired_order)}
+        
+        def get_sort_key(team):
+            team_name = team.get("team_name", "")
+            # Get priority from order_map, or use a high number (999) for teams not in the list
+            priority = order_map.get(team_name, 999)
+            # If priority is same, sort by team number to maintain consistency
+            return (priority, team.get("team_number", 0))
+        
+        return sorted(teams, key=get_sort_key)
+    
     def _is_issue_created_in_period(self, issue: Dict, start_date: datetime, end_date: datetime) -> bool:
         """Check if an issue was created within the reporting period"""
         try:
@@ -173,21 +272,48 @@ class ContentGenerator:
         except:
             return False
 
-    def _find_team_sheet_data(self, team_name: str, sheets_data: Dict) -> Tuple[Dict, Optional[str]]:
+    def _extract_team_name_from_sheet_title(self, sheet_title: str) -> str:
         """
-        Find Google Sheets data that matches a team name
+        Extract a clean team name from a Google Sheet title
+        
+        Examples:
+        - "SmarterPosting Weekly Tracker Template" -> "SmarterPosting"
+        - "SmarterAR Weekly Tracker Template" -> "SmarterAR"
+        - "SmarterCoding Weekly Tracker Template" -> "SmarterCoding"
+        - "SmarterAuth Weekly Tracker" -> "SmarterAuth"
         
         Returns:
-            Tuple of (sheet_data_dict, matched_sheet_id) or ({}, None) if no match
+            Clean team name extracted from sheet title
+        """
+        import re
+        # Remove common suffixes like "Weekly Tracker", "Template", etc.
+        # Look for the main product name (typically starts with "Smarter")
+        match = re.match(r'^(Smarter[A-Za-z]+)', sheet_title)
+        if match:
+            return match.group(1)
+        # If no "Smarter" prefix, try to get the first word
+        words = sheet_title.split()
+        if words:
+            return words[0]
+        return sheet_title
+    
+    def _find_team_sheet_data(self, jira_board_key: str, sheets_data: Dict) -> Tuple[Dict, Optional[str], Optional[str]]:
+        """
+        Find Google Sheets data that matches a Jira board key
+        
+        Returns:
+            Tuple of (sheet_data_dict, matched_sheet_id, team_name) or ({}, None, None) if no match
         """
         for sheet_id, sheet_data in sheets_data.items():
             sheet_title = sheet_data.get("title", "")
-            # Simple matching - look for team name in sheet title or vice versa
-            if (team_name.lower() in sheet_title.lower() or 
-                sheet_title.lower() in team_name.lower() or
-                any(team_name.lower() in tab_name.lower() for tab_name in sheet_data.get("tabs", {}).keys())):
-                return (self._extract_sheet_team_data(sheet_data), sheet_id)
-        return ({}, None)
+            # Simple matching - look for board key in sheet title or vice versa
+            if (jira_board_key.lower() in sheet_title.lower() or 
+                sheet_title.lower() in jira_board_key.lower() or
+                any(jira_board_key.lower() in tab_name.lower() for tab_name in sheet_data.get("tabs", {}).keys())):
+                # Extract team name from sheet title
+                team_name = self._extract_team_name_from_sheet_title(sheet_title)
+                return (self._extract_sheet_team_data(sheet_data), sheet_id, team_name)
+        return ({}, None, None)
 
     def _extract_sheet_team_data(self, sheet_data: Dict) -> Dict:
         """Extract team-specific data from a Google Sheet"""
