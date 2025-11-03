@@ -35,9 +35,18 @@ class StateManager:
     """Manages application state using PostgreSQL database"""
     
     def __init__(self):
-        self.engine = create_engine(settings.database_url)
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-        self._create_tables()
+        self.engine = None
+        self.SessionLocal = None
+        self.db_available = False
+        try:
+            self.engine = create_engine(settings.database_url)
+            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+            self._create_tables()
+            self.db_available = True
+        except Exception as e:
+            logger.warning(f"Database not available: {e}")
+            logger.warning("Continuing without database (state tracking will be disabled)")
+            self.db_available = False
     
     def _create_tables(self):
         """Create database tables if they don't exist"""
@@ -66,6 +75,9 @@ class StateManager:
         Returns:
             True if successful, False otherwise
         """
+        if not self.db_available:
+            logger.debug("Database not available, skipping save_doc_id")
+            return False
         try:
             week_id = self._get_week_identifier()
             
@@ -112,6 +124,9 @@ class StateManager:
         Returns:
             Google Doc ID if found, None otherwise
         """
+        if not self.db_available:
+            logger.debug("Database not available, returning None for get_doc_id")
+            return None
         if week_identifier is None:
             week_identifier = self._get_week_identifier()
         
@@ -177,6 +192,9 @@ class StateManager:
         Returns:
             True if successful, False otherwise
         """
+        if not self.db_available:
+            logger.debug("Database not available, skipping log_execution")
+            return False
         try:
             week_id = self._get_week_identifier()
             

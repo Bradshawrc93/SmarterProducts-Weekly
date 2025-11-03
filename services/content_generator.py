@@ -2,7 +2,7 @@
 Content Generation Service - OpenAI Integration
 """
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import openai
 from config.settings import settings
@@ -42,18 +42,24 @@ class ContentGenerator:
             # Calculate proper date ranges
             today = datetime.now()
             
-            # This week's Monday (data collection period start)
+            # Last Monday (data collection period start)
             days_since_monday = today.weekday()
             if days_since_monday == 0:  # Today is Monday
-                target_monday = today
+                # Go back to previous Monday (7 days ago)
+                target_monday = today - timedelta(days=7)
             else:
-                target_monday = today - timedelta(days=days_since_monday)
+                # Go back to last Monday (this week's Monday - 7 days)
+                this_monday = today - timedelta(days=days_since_monday)
+                target_monday = this_monday - timedelta(days=7)
             
             # This Tuesday (data collection period end)
-            this_tuesday = target_monday + timedelta(days=8)  # Monday + 8 days = next Tuesday
+            this_tuesday = target_monday + timedelta(days=8)  # Last Monday + 8 days = this Tuesday
             
             # This Wednesday (report date)
-            this_wednesday = target_monday + timedelta(days=9)  # Monday + 9 days = next Wednesday
+            days_until_wednesday = (2 - today.weekday()) % 7
+            if days_until_wednesday == 0 and today.weekday() > 2:
+                days_until_wednesday = 7
+            this_wednesday = today + timedelta(days=days_until_wednesday)
             
             week_start = target_monday.strftime('%-m/%-d/%y')
             week_end = this_tuesday.strftime('%-m/%-d/%y') 
@@ -73,7 +79,10 @@ class ContentGenerator:
             jira_boards = data.get("jira", {}).get("boards", {})
             sheets_data = data.get("sheets", {}).get("sheets", {})
             
-            # Create team mapping (assuming board keys match team names)
+            # Create a mapping to track which sheets have been matched to teams
+            matched_sheets = set()
+            
+            # First pass: Create teams from Jira boards and try to match sheets
             team_counter = 1
             for board_key, board_data in jira_boards.items():
                 team_info = {
@@ -95,22 +104,36 @@ class ContentGenerator:
                 }
                 
                 # Try to find matching Google Sheets data
-                # Look for sheet data that might correspond to this team
-                team_sheet_data = self._find_team_sheet_data(board_key, sheets_data)
-                if team_sheet_data:
+                team_sheet_data, matched_sheet_id = self._find_team_sheet_data(board_key, sheets_data)
+                if team_sheet_data and matched_sheet_id:
                     team_info["google_sheet_data"] = team_sheet_data
+                    matched_sheets.add(matched_sheet_id)
                 
                 structured_data["teams"].append(team_info)
                 team_counter += 1
             
-            # Add any remaining sheet data that didn't match Jira boards
+            # Second pass: Ensure ALL sheets are represented as teams
+            # Add any sheets that didn't match Jira boards as separate teams
             for sheet_id, sheet_data in sheets_data.items():
+                # Skip if this sheet was already matched to a Jira board
+                if sheet_id in matched_sheets:
+                    continue
+                
                 sheet_title = sheet_data.get("title", "Unknown Sheet")
-                if not any(team["team_name"].lower() in sheet_title.lower() or 
-                          sheet_title.lower() in team["team_name"].lower() 
-                          for team in structured_data["teams"]):
-                    
-                    # Add as a separate team
+                
+                # Check if we already have a team with this exact sheet title
+                existing_team = next(
+                    (team for team in structured_data["teams"] 
+                     if team["team_name"].lower() == sheet_title.lower()),
+                    None
+                )
+                
+                if existing_team:
+                    # Add sheet data to existing team if it doesn't have any
+                    if not existing_team.get("google_sheet_data"):
+                        existing_team["google_sheet_data"] = self._extract_sheet_team_data(sheet_data)
+                else:
+                    # Add as a new separate team
                     team_info = {
                         "team_number": team_counter,
                         "team_name": sheet_title,
@@ -150,16 +173,21 @@ class ContentGenerator:
         except:
             return False
 
-    def _find_team_sheet_data(self, team_name: str, sheets_data: Dict) -> Dict:
-        """Find Google Sheets data that matches a team name"""
+    def _find_team_sheet_data(self, team_name: str, sheets_data: Dict) -> Tuple[Dict, Optional[str]]:
+        """
+        Find Google Sheets data that matches a team name
+        
+        Returns:
+            Tuple of (sheet_data_dict, matched_sheet_id) or ({}, None) if no match
+        """
         for sheet_id, sheet_data in sheets_data.items():
             sheet_title = sheet_data.get("title", "")
             # Simple matching - look for team name in sheet title or vice versa
             if (team_name.lower() in sheet_title.lower() or 
                 sheet_title.lower() in team_name.lower() or
                 any(team_name.lower() in tab_name.lower() for tab_name in sheet_data.get("tabs", {}).keys())):
-                return self._extract_sheet_team_data(sheet_data)
-        return {}
+                return (self._extract_sheet_team_data(sheet_data), sheet_id)
+        return ({}, None)
 
     def _extract_sheet_team_data(self, sheet_data: Dict) -> Dict:
         """Extract team-specific data from a Google Sheet"""
@@ -237,19 +265,23 @@ class ContentGenerator:
             prompt = prompt_template.format(**formatted_data)
             
             # Generate content with OpenAI (increased token limit for full report)
+            # For reasoning models, we need much higher token limits since reasoning tokens are separate
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a senior product operations analyst creating executive-level weekly reports."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=3000,  # Increased for full report
-                temperature=0.7
+                max_completion_tokens=8000  # Increased significantly for reasoning models
             )
             
             generated_content = response.choices[0].message.content.strip()
             
-            logger.info("Product Team Progress Report generated successfully")
+            logger.info(f"Product Team Progress Report generated successfully (length: {len(generated_content)} chars)")
+            if len(generated_content) == 0:
+                logger.warning("⚠️ OpenAI returned empty content! Full response: %s", response)
+                logger.warning("Response choices: %s", [c.message.content[:200] if c.message.content else "None" for c in response.choices])
+            
             return generated_content
             
         except Exception as e:

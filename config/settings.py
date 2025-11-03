@@ -4,8 +4,8 @@ Configuration settings for SmarterProducts Weekly Automation
 import os
 import json
 from typing import List, Optional
-from pydantic_settings import BaseSettings
-from pydantic import Field, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, validator, ConfigDict
 
 
 class Settings(BaseSettings):
@@ -24,22 +24,23 @@ class Settings(BaseSettings):
     jira_base_url: str = Field(env="JIRA_BASE_URL")
     jira_api_token: str = Field(env="JIRA_API_TOKEN")
     jira_email: str = Field(env="JIRA_EMAIL")
-    jira_boards: List[str] = Field(env="JIRA_BOARDS")
+    jira_boards_raw: Optional[str] = Field(default=None, validation_alias="JIRA_BOARDS")
     
-    @validator('jira_boards', pre=True)
-    def parse_jira_boards(cls, v):
-        if isinstance(v, str):
-            return [board.strip() for board in v.split(',')]
-        return v
+    @property
+    def jira_boards(self) -> List[str]:
+        """Parse JIRA_BOARDS from comma-separated string"""
+        if not self.jira_boards_raw:
+            return []
+        return [board.strip() for board in self.jira_boards_raw.split(',') if board.strip()]
     
     # =============================================================================
     # GOOGLE SERVICES SETTINGS
     # =============================================================================
     google_credentials: dict = Field(env="GOOGLE_CREDENTIALS")
     google_drive_folder_id: str = Field(env="GOOGLE_DRIVE_FOLDER_ID")
-    google_sheets_ids: List[str] = Field(env="GOOGLE_SHEETS_IDS")
+    google_sheets_ids_raw: Optional[str] = Field(default=None, validation_alias="GOOGLE_SHEETS_IDS")
     google_sheets_tab_strategy: str = Field(default="auto", env="GOOGLE_SHEETS_TAB_STRATEGY")
-    google_sheets_tabs: List[str] = Field(default=[], env="GOOGLE_SHEETS_TABS")
+    google_sheets_tabs_raw: Optional[str] = Field(default=None, validation_alias="GOOGLE_SHEETS_TABS")
     
     @validator('google_credentials', pre=True)
     def parse_google_credentials(cls, v):
@@ -47,17 +48,19 @@ class Settings(BaseSettings):
             return json.loads(v)
         return v
     
-    @validator('google_sheets_ids', pre=True)
-    def parse_google_sheets_ids(cls, v):
-        if isinstance(v, str):
-            return [sheet_id.strip() for sheet_id in v.split(',')]
-        return v
+    @property
+    def google_sheets_ids(self) -> List[str]:
+        """Parse GOOGLE_SHEETS_IDS from comma-separated string"""
+        if not self.google_sheets_ids_raw:
+            return []
+        return [sheet_id.strip() for sheet_id in self.google_sheets_ids_raw.split(',') if sheet_id.strip()]
     
-    @validator('google_sheets_tabs', pre=True)
-    def parse_google_sheets_tabs(cls, v):
-        if isinstance(v, str):
-            return [tab.strip() for tab in v.split(',') if tab.strip()]
-        return v
+    @property
+    def google_sheets_tabs(self) -> List[str]:
+        """Parse GOOGLE_SHEETS_TABS from comma-separated string"""
+        if not self.google_sheets_tabs_raw:
+            return []
+        return [tab.strip() for tab in self.google_sheets_tabs_raw.split(',') if tab.strip()]
     
     # =============================================================================
     # OPENAI SETTINGS
@@ -69,22 +72,24 @@ class Settings(BaseSettings):
     # EMAIL SETTINGS
     # =============================================================================
     sendgrid_api_key: str = Field(env="SENDGRID_API_KEY")
-    preview_email_recipients: List[str] = Field(env="PREVIEW_EMAIL_RECIPIENTS")
-    final_email_recipients: List[str] = Field(env="FINAL_EMAIL_RECIPIENTS")
+    preview_email_recipients_raw: Optional[str] = Field(default=None, validation_alias="PREVIEW_EMAIL_RECIPIENTS")
+    final_email_recipients_raw: Optional[str] = Field(default=None, validation_alias="FINAL_EMAIL_RECIPIENTS")
     from_email: str = Field(env="FROM_EMAIL")
     from_name: str = Field(default="Weekly Reports System", env="FROM_NAME")
     
-    @validator('preview_email_recipients', pre=True)
-    def parse_preview_recipients(cls, v):
-        if isinstance(v, str):
-            return [email.strip() for email in v.split(',')]
-        return v
+    @property
+    def preview_email_recipients(self) -> List[str]:
+        """Parse PREVIEW_EMAIL_RECIPIENTS from comma-separated string"""
+        if not self.preview_email_recipients_raw:
+            return []
+        return [email.strip() for email in self.preview_email_recipients_raw.split(',') if email.strip()]
     
-    @validator('final_email_recipients', pre=True)
-    def parse_final_recipients(cls, v):
-        if isinstance(v, str):
-            return [email.strip() for email in v.split(',')]
-        return v
+    @property
+    def final_email_recipients(self) -> List[str]:
+        """Parse FINAL_EMAIL_RECIPIENTS from comma-separated string"""
+        if not self.final_email_recipients_raw:
+            return []
+        return [email.strip() for email in self.final_email_recipients_raw.split(',') if email.strip()]
     
     # =============================================================================
     # DATABASE SETTINGS
@@ -109,10 +114,11 @@ class Settings(BaseSettings):
     preview_schedule: int = Field(default=22, env="PREVIEW_SCHEDULE")  # 10 PM
     final_schedule: int = Field(default=8, env="FINAL_SCHEDULE")      # 8 AM
     
-    class Config:
-        # Try multiple env file locations
-        env_file = [".env", "config.env", ".env.local"]
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=[".env", "config.env", ".env.local"],
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra environment variables
+    )
 
 
 # Global settings instance

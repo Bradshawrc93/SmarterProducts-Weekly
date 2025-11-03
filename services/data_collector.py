@@ -139,7 +139,7 @@ class DataCollector:
     
     def _get_previous_monday_date(self) -> str:
         """
-        Get the date of the most recent Monday in MM/DD/YY format
+        Get the date of last Monday (previous week) in MM/DD/YY format
         
         Returns:
             Date string in MM/DD/YY format (e.g., "10/27/25")
@@ -148,21 +148,21 @@ class DataCollector:
         
         today = datetime.now()
         
-        # Find the most recent Monday (this week's Monday)
-        # Monday is weekday 0, so we need to go back to the most recent Monday
+        # Find last Monday (previous week's Monday)
         days_since_monday = today.weekday()  # 0=Monday, 1=Tuesday, etc.
         
         if days_since_monday == 0:  # Today is Monday
-            # Use today (current Monday)
-            target_monday = today
+            # Go back to previous Monday (7 days ago)
+            target_monday = today - timedelta(days=7)
         else:
-            # Go back to this week's Monday
-            target_monday = today - timedelta(days=days_since_monday)
+            # Go back to last Monday (this week's Monday - 7 days)
+            this_monday = today - timedelta(days=days_since_monday)
+            target_monday = this_monday - timedelta(days=7)
         
         # Format as MM/DD/YY (with leading zeros removed for month/day)
         formatted_date = target_monday.strftime("%-m/%-d/%y")
         
-        logger.info(f"Target date for weekly tabs: {formatted_date} (this week's Monday)")
+        logger.info(f"Target date for weekly tabs: {formatted_date} (last Monday)")
         return formatted_date
 
     def _find_date_based_tab(self, spreadsheet, target_date: str) -> Optional[str]:

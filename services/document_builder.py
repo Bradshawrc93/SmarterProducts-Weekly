@@ -69,17 +69,11 @@ class DocumentBuilder:
         
         today = datetime.now()
         
-        # Find the Wednesday of this week
-        days_since_monday = today.weekday()  # 0=Monday, 1=Tuesday, etc.
-        
-        if days_since_monday <= 2:  # Monday, Tuesday, or Wednesday
-            # This week's Wednesday
-            days_to_wednesday = 2 - days_since_monday  # Wednesday is weekday 2
-            wednesday = today + timedelta(days=days_to_wednesday)
-        else:  # Thursday, Friday, Saturday, Sunday
-            # Next week's Wednesday
-            days_to_next_wednesday = 9 - days_since_monday  # 7 days + 2 for Wednesday
-            wednesday = today + timedelta(days=days_to_next_wednesday)
+        # Find this week's Wednesday
+        days_until_wednesday = (2 - today.weekday()) % 7  # Wednesday is weekday 2
+        if days_until_wednesday == 0 and today.weekday() > 2:  # If past Wednesday, get next Wednesday
+            days_until_wednesday = 7
+        wednesday = today + timedelta(days=days_until_wednesday)
         
         # Format as MM/DD/YY (no leading zeros)
         formatted_date = wednesday.strftime("%-m/%-d/%y")
