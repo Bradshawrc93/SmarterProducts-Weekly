@@ -42,20 +42,20 @@ class ContentGenerator:
             # Calculate proper date ranges
             today = datetime.now()
             
-            # Previous Monday (data collection period start)
+            # This week's Monday (data collection period start)
             days_since_monday = today.weekday()
             if days_since_monday == 0:  # Today is Monday
-                previous_monday = today - timedelta(days=7)
+                target_monday = today
             else:
-                previous_monday = today - timedelta(days=days_since_monday + 7)
+                target_monday = today - timedelta(days=days_since_monday)
             
             # This Tuesday (data collection period end)
-            this_tuesday = previous_monday + timedelta(days=8)  # Monday + 8 days = next Tuesday
+            this_tuesday = target_monday + timedelta(days=8)  # Monday + 8 days = next Tuesday
             
             # This Wednesday (report date)
-            this_wednesday = previous_monday + timedelta(days=9)  # Monday + 9 days = next Wednesday
+            this_wednesday = target_monday + timedelta(days=9)  # Monday + 9 days = next Wednesday
             
-            week_start = previous_monday.strftime('%-m/%-d/%y')
+            week_start = target_monday.strftime('%-m/%-d/%y')
             week_end = this_tuesday.strftime('%-m/%-d/%y') 
             report_date = this_wednesday.strftime('%-m/%-d/%y')
             
@@ -89,7 +89,7 @@ class ContentGenerator:
                     "issues_completed": stats.get('completed', 0),
                     "issues_in_progress": stats.get('in_progress', 0),
                     "new_issues_created": len([issue for issue in board_data.get("issues", []) 
-                                             if self._is_issue_created_in_period(issue, previous_monday, this_tuesday)]),
+                                             if self._is_issue_created_in_period(issue, target_monday, this_tuesday)]),
                     "total_issues": stats.get('total', 0),
                     "blocked_issues": stats.get('blocked', 0)
                 }

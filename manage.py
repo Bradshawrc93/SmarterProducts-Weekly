@@ -15,6 +15,11 @@ from services.document_builder import DocumentBuilder
 from services.notification import NotificationService
 from models.state import StateManager
 
+# OAuth imports for document creation
+import os
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

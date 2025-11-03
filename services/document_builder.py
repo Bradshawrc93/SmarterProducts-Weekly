@@ -22,15 +22,32 @@ class DocumentBuilder:
         self._setup_services()
     
     def _setup_services(self):
-        """Initialize Google Docs and Drive services"""
+        """Initialize Google Docs and Drive services with OAuth support"""
         try:
-            credentials = Credentials.from_service_account_info(
-                settings.google_credentials,
-                scopes=[
+            # Check if OAuth is configured for document creation
+            import os
+            if (os.path.exists('token.json') and 
+                getattr(settings, 'use_oauth_for_docs', False)):
+                
+                logger.info("Using OAuth for document creation")
+                from google.oauth2.credentials import Credentials as OAuthCredentials
+                
+                SCOPES = [
                     'https://www.googleapis.com/auth/documents',
                     'https://www.googleapis.com/auth/drive'
                 ]
-            )
+                
+                credentials = OAuthCredentials.from_authorized_user_file('token.json', SCOPES)
+                
+            else:
+                logger.info("Using service account for document creation")
+                credentials = Credentials.from_service_account_info(
+                    settings.google_credentials,
+                    scopes=[
+                        'https://www.googleapis.com/auth/documents',
+                        'https://www.googleapis.com/auth/drive'
+                    ]
+                )
             
             self.docs_service = build('docs', 'v1', credentials=credentials)
             self.drive_service = build('drive', 'v3', credentials=credentials)
@@ -83,12 +100,14 @@ class DocumentBuilder:
             Document ID if found, None otherwise
         """
         try:
-            # Search for documents with this title in the folder
+            # Search for documents with this title in the folder (with shared drive support)
             query = f"name='{doc_title}' and parents in '{folder_id}' and mimeType='application/vnd.google-apps.document'"
             
             results = self.drive_service.files().list(
                 q=query,
-                fields="files(id, name)"
+                fields="files(id, name)",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
             ).execute()
             
             files = results.get('files', [])
@@ -136,22 +155,28 @@ class DocumentBuilder:
                 return existing_doc_id
             else:
                 logger.info(f"Creating new document: {doc_title}")
-                # Create new document
-                document = {'title': doc_title}
-                
-                doc = self.docs_service.documents().create(body=document).execute()
-                doc_id = doc.get('documentId')
-                
-                logger.info(f"Created Google Doc with ID: {doc_id}")
-                
-                # Move to specified folder
+                # Create new document directly in shared drive folder
                 if folder_id:
-                    self.drive_service.files().update(
-                        fileId=doc_id,
-                        addParents=folder_id,
-                        removeParents='root'
+                    # Create directly in folder with shared drive support
+                    file_metadata = {
+                        'name': doc_title,
+                        'parents': [folder_id],
+                        'mimeType': 'application/vnd.google-apps.document'
+                    }
+                    
+                    doc = self.drive_service.files().create(
+                        body=file_metadata,
+                        supportsAllDrives=True
                     ).execute()
-                    logger.info(f"Moved document to folder: {folder_id}")
+                    doc_id = doc.get('id')
+                    
+                    logger.info(f"Created Google Doc directly in shared drive folder: {doc_id}")
+                else:
+                    # Fallback: create in root
+                    document = {'title': doc_title}
+                    doc = self.docs_service.documents().create(body=document).execute()
+                    doc_id = doc.get('documentId')
+                    logger.info(f"Created Google Doc in root: {doc_id}")
                 
                 # Add content to the document
                 self._populate_document(doc_id, {**content, "title": doc_title})

@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = Field(default=None, env="SENTRY_DSN")
     
     # =============================================================================
+    # OAUTH SETTINGS (for document creation)
+    # =============================================================================
+    use_oauth_for_docs: bool = Field(default=True, env="USE_OAUTH_FOR_DOCS")
+    oauth_credentials_file: str = Field(default="oauth_credentials.json", env="OAUTH_CREDENTIALS_FILE")
+    oauth_token_file: str = Field(default="token.json", env="OAUTH_TOKEN_FILE")
+    
+    # =============================================================================
     # SCHEDULING SETTINGS
     # =============================================================================
     preview_schedule: int = Field(default=22, env="PREVIEW_SCHEDULE")  # 10 PM

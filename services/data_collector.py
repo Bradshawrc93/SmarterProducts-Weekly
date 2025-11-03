@@ -139,7 +139,7 @@ class DataCollector:
     
     def _get_previous_monday_date(self) -> str:
         """
-        Get the date of the previous Monday in MM/DD/YY format
+        Get the date of the most recent Monday in MM/DD/YY format
         
         Returns:
             Date string in MM/DD/YY format (e.g., "10/27/25")
@@ -148,21 +148,21 @@ class DataCollector:
         
         today = datetime.now()
         
-        # Find the previous Monday
+        # Find the most recent Monday (this week's Monday)
         # Monday is weekday 0, so we need to go back to the most recent Monday
         days_since_monday = today.weekday()  # 0=Monday, 1=Tuesday, etc.
         
         if days_since_monday == 0:  # Today is Monday
-            # Go back to previous Monday (7 days ago)
-            previous_monday = today - timedelta(days=7)
+            # Use today (current Monday)
+            target_monday = today
         else:
-            # Go back to the most recent Monday
-            previous_monday = today - timedelta(days=days_since_monday + 7)
+            # Go back to this week's Monday
+            target_monday = today - timedelta(days=days_since_monday)
         
         # Format as MM/DD/YY (with leading zeros removed for month/day)
-        formatted_date = previous_monday.strftime("%-m/%-d/%y")
+        formatted_date = target_monday.strftime("%-m/%-d/%y")
         
-        logger.info(f"Target date for weekly tabs: {formatted_date} (previous Monday)")
+        logger.info(f"Target date for weekly tabs: {formatted_date} (this week's Monday)")
         return formatted_date
 
     def _find_date_based_tab(self, spreadsheet, target_date: str) -> Optional[str]:
@@ -179,12 +179,12 @@ class DataCollector:
         try:
             all_worksheets = spreadsheet.worksheets()
             
-            # Try exact match first
+            # Try exact match first (including trimming whitespace)
             for worksheet in all_worksheets:
                 tab_name = worksheet.title.strip()
                 if tab_name == target_date:
                     logger.info(f"Found exact date match: '{tab_name}'")
-                    return tab_name
+                    return worksheet.title  # Return original title to preserve formatting
             
             # Try variations with different formatting
             import re
@@ -207,7 +207,7 @@ class DataCollector:
                     tab_name = worksheet.title.strip()
                     if tab_name in alt_formats:
                         logger.info(f"Found date match with alternative format: '{tab_name}' (target: {target_date})")
-                        return tab_name
+                        return worksheet.title  # Return original title
                 
                 # Try fuzzy matching - look for tabs that contain the date
                 for worksheet in all_worksheets:
@@ -251,14 +251,14 @@ class DataCollector:
                 logger.info(f"Found weekly tracker tab: '{date_tab}'")
                 return [date_tab]
             else:
-                # No matching date tab found - this is an error condition
-                logger.error(f"❌ MISSING DATE TAB: Could not find tab for date '{target_date}' in spreadsheet '{spreadsheet.title}'")
+                # No matching date tab found - log warning but continue
+                logger.warning(f"⚠️ MISSING DATE TAB: Could not find tab for date '{target_date}' in spreadsheet '{spreadsheet.title}'")
                 
                 # List available tabs for debugging
                 all_tabs = [ws.title for ws in spreadsheet.worksheets()]
-                logger.error(f"Available tabs in '{spreadsheet.title}': {all_tabs}")
+                logger.warning(f"Available tabs in '{spreadsheet.title}': {all_tabs}")
                 
-                # Return empty list to indicate error
+                # Return empty list but don't fail - let the report generation continue
                 return []
             
         except Exception as e:

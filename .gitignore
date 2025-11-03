@@ -64,6 +64,11 @@ config/credentials.json
 google-credentials.json
 secrets.json
 
+# OAuth files (NEVER COMMIT THESE)
+token.json
+oauth_credentials.json
+credentials.json
+
 # Build outputs
 dist/
 build/
