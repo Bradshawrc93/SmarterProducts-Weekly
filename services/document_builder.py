@@ -531,27 +531,33 @@ class DocumentBuilder:
                                 for content_item in cell.get('content', []):
                                     if 'paragraph' in content_item:
                                         para = content_item['paragraph']
+                                        # First try textRun (for cells with existing content)
                                         for para_element in para.get('elements', []):
                                             if 'textRun' in para_element:
                                                 start_index = para_element.get('startIndex')
-                                                if start_index is not None:
-                                                    # Add insert text request
-                                                    batch_requests.append({
-                                                        'insertText': {
-                                                            'location': {'index': start_index},
-                                                            'text': cell_text
-                                                        }
-                                                    })
-                                                    
-                                                    # Store location for formatting
-                                                    cell_locations.append({
-                                                        'start': start_index,
-                                                        'end': start_index + len(cell_text),
-                                                        'text': cell_text,
-                                                        'is_header': row_idx == 0
-                                                    })
-                                                    break
+                                                break
+                                        # If no textRun found, use paragraph startIndex (for empty cells)
+                                        if start_index is None:
+                                            start_index = content_item.get('startIndex')
+                                            if start_index is not None:
+                                                start_index = start_index + 1  # Skip paragraph marker
+                                        
                                         if start_index is not None:
+                                            # Add insert text request
+                                            batch_requests.append({
+                                                'insertText': {
+                                                    'location': {'index': start_index},
+                                                    'text': cell_text
+                                                }
+                                            })
+                                            
+                                            # Store location for formatting
+                                            cell_locations.append({
+                                                'start': start_index,
+                                                'end': start_index + len(cell_text),
+                                                'text': cell_text,
+                                                'is_header': row_idx == 0
+                                            })
                                             break
                                 if start_index is None:
                                     logger.warning(f"Could not find start index for table {table_idx + 1}, row {row_idx}, col {col_idx}")
