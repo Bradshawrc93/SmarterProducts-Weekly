@@ -433,7 +433,7 @@ class ContentGenerator:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a senior product operations analyst creating executive-level weekly reports."},
+                    {"role": "system", "content": "You are a product manager for a healthcare RCM company creating executive-level weekly reports."},
                     {"role": "user", "content": prompt}
                 ],
                 max_completion_tokens=8000  # Increased significantly for reasoning models

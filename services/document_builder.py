@@ -10,6 +10,7 @@ import time
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.service_account import Credentials
+from googleapiclient.errors import HttpError
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -368,9 +369,45 @@ class DocumentBuilder:
             logger.error(f"Error populating document: {e}")
             raise
     
+    def _execute_with_retry(self, doc_id: str, requests_list: list, max_retries: int = 3):
+        """
+        Execute batch update with retry logic and exponential backoff for rate limits
+        
+        Args:
+            doc_id: Document ID
+            requests_list: List of request dictionaries
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        for attempt in range(max_retries):
+            try:
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={'requests': requests_list}
+                ).execute()
+                return True
+            except HttpError as e:
+                if e.resp.status == 429:  # Rate limit error
+                    wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                    logger.warning(f"Rate limit hit (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    if attempt == max_retries - 1:
+                        logger.error(f"Rate limit retry exhausted after {max_retries} attempts")
+                        return False
+                else:
+                    # Non-rate-limit error, don't retry
+                    logger.error(f"HTTP error during batch update: {e}")
+                    return False
+            except Exception as e:
+                logger.error(f"Unexpected error during batch update: {e}")
+                return False
+        return False
+
     def _create_and_populate_tables(self, doc_id: str, table_insertion_info: list):
         """
-        Create tables and populate cells with content
+        Create tables and populate cells with content using batched operations and retry logic
         
         Args:
             doc_id: Document ID
@@ -413,47 +450,68 @@ class DocumentBuilder:
                                 para_text += elem['textRun'].get('content', '')
                         
                         if '[TABLE PLACEHOLDER]' in para_text:
-                            # Delete the placeholder
-                            self.docs_service.documents().batchUpdate(
-                                documentId=doc_id,
-                                body={'requests': [{
+                            # Delete the placeholder and create table in one batch
+                            requests = [
+                                {
                                     'deleteContentRange': {
                                         'range': {
                                             'startIndex': para_start,
                                             'endIndex': para_end - 1
                                         }
                                     }
-                                }]}
-                            ).execute()
-                            placeholder_found = True
+                                },
+                                {
+                                    'insertTable': {
+                                        'location': {'index': para_start + 1},
+                                        'rows': num_rows,
+                                        'columns': num_cols
+                                    }
+                                }
+                            ]
+                            if self._execute_with_retry(doc_id, requests):
+                                placeholder_found = True
                             break
                 
-                if placeholder_found:
-                    # Create table at the placeholder location (now deleted)
-                    self.docs_service.documents().batchUpdate(
-                        documentId=doc_id,
-                        body={'requests': [{
-                            'insertTable': {
-                                'location': {'index': para_start + 1},
-                                'rows': num_rows,
-                                'columns': num_cols
-                            }
-                        }]}
-                    ).execute()
+                if not placeholder_found:
+                    logger.warning(f"Could not find placeholder for table {table_idx + 1}")
+                
+                # Add delay between table creation to avoid rate limits
+                if table_idx > 0:
+                    time.sleep(3)
             
-            # Now populate all tables
-            logger.info("Populating table cells...")
+            # Now populate all tables with batched operations
+            logger.info("Populating table cells with batched operations...")
             for table_idx, table_info in enumerate(table_insertion_info):
                 table_data = table_info['table_data']
                 logger.info(f"Processing table {table_idx + 1}: {len(table_data)} rows, {len(table_data[0]) if table_data else 0} cols")
                 
-                # Add small delay between tables to avoid rate limits
+                # Add delay between tables to avoid rate limits
                 if table_idx > 0:
-                    time.sleep(2)  # Wait 2 seconds between tables
+                    time.sleep(5)  # Increased delay between tables
                 
-                # Process each cell one at a time to avoid index shifting issues
-                total_cells = 0
+                # Get current document structure
+                doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                
+                # Find the target table
+                table_count = 0
+                target_table_element = None
+                for element in doc.get('body', {}).get('content', []):
+                    if 'table' in element:
+                        if table_count == table_idx:
+                            target_table_element = element.get('table', {})
+                            break
+                        table_count += 1
+                
+                if not target_table_element:
+                    logger.warning(f"Could not find table {table_idx + 1} in document")
+                    continue
+                
+                # Build batched requests for all cells in this table
                 num_cols = len(table_data[0]) if table_data else 0
+                batch_requests = []
+                cell_locations = []  # Store (start_index, end_index, text, is_header) for formatting
+                
+                # First pass: collect all cell locations and build insert requests
                 for row_idx in range(len(table_data)):
                     row_data = table_data[row_idx]
                     for col_idx in range(num_cols):
@@ -462,75 +520,92 @@ class DocumentBuilder:
                         else:
                             cell_text = str(row_data[col_idx]) if row_data[col_idx] is not None else ""
                         
-                        # Re-read document to get current indices (they shift after each insertion)
-                        doc = self.docs_service.documents().get(documentId=doc_id).execute()
-                        
-                        # Find this specific cell again - iterate through all tables to find the right one
-                        cell_found = False
-                        table_count = 0
-                        for element in doc.get('body', {}).get('content', []):
-                            if 'table' in element:
-                                # Check if this is our target table
-                                if table_count == table_idx:
-                                    table_elem = element.get('table', {})
-                                    for r_idx, r in enumerate(table_elem.get('tableRows', [])):
-                                        for c_idx, c in enumerate(r.get('tableCells', [])):
-                                            # Check if this is our target cell
-                                            if r_idx == row_idx and c_idx == col_idx:
-                                                # Found our cell - get current startIndex and insert
-                                                for content_item in c.get('content', []):
-                                                    if 'paragraph' in content_item:
-                                                        para = content_item['paragraph']
-                                                        for para_element in para.get('elements', []):
-                                                            if 'textRun' in para_element:
-                                                                current_start = para_element.get('startIndex')
-                                                                if current_start is not None:
-                                                                    # Insert text at current startIndex
-                                                                    self.docs_service.documents().batchUpdate(
-                                                                        documentId=doc_id,
-                                                                        body={'requests': [{
-                                                                            'insertText': {
-                                                                                'location': {'index': current_start},
-                                                                                'text': cell_text
-                                                                            }
-                                                                        }]}
-                                                                    ).execute()
-                                                                    
-                                                                    # Format header row as bold
-                                                                    if row_idx == 0 and cell_text:
-                                                                        self.docs_service.documents().batchUpdate(
-                                                                            documentId=doc_id,
-                                                                            body={'requests': [{
-                                                                                'updateTextStyle': {
-                                                                                    'range': {
-                                                                                        'startIndex': current_start,
-                                                                                        'endIndex': current_start + len(cell_text)
-                                                                                    },
-                                                                                    'textStyle': {
-                                                                                        'bold': True
-                                                                                    },
-                                                                                    'fields': 'bold'
-                                                                                }
-                                                                            }]}
-                                                                        ).execute()
-                                                                    
-                                                                    total_cells += 1
-                                                                    cell_found = True
-                                                                    time.sleep(0.1)  # Small delay to avoid rate limits
-                                                                    break
-                                                        if cell_found:
-                                                            break
-                                                break
-                                        if cell_found:
+                        # Find this cell in the table structure
+                        table_rows = target_table_element.get('tableRows', [])
+                        if row_idx < len(table_rows):
+                            row = table_rows[row_idx]
+                            table_cells = row.get('tableCells', [])
+                            if col_idx < len(table_cells):
+                                cell = table_cells[col_idx]
+                                # Get the start index from the first paragraph in the cell
+                                start_index = None
+                                for content_item in cell.get('content', []):
+                                    if 'paragraph' in content_item:
+                                        para = content_item['paragraph']
+                                        for para_element in para.get('elements', []):
+                                            if 'textRun' in para_element:
+                                                start_index = para_element.get('startIndex')
+                                                if start_index is not None:
+                                                    # Add insert text request
+                                                    batch_requests.append({
+                                                        'insertText': {
+                                                            'location': {'index': start_index},
+                                                            'text': cell_text
+                                                        }
+                                                    })
+                                                    
+                                                    # Store location for formatting
+                                                    cell_locations.append({
+                                                        'start': start_index,
+                                                        'end': start_index + len(cell_text),
+                                                        'text': cell_text,
+                                                        'is_header': row_idx == 0
+                                                    })
+                                                    break
+                                        if start_index is not None:
                                             break
-                                    if cell_found:
-                                        break
-                                table_count += 1
-                        
-                        if not cell_found:
-                            logger.warning(f"Table {table_idx + 1}, Row {row_idx}, Col {col_idx}: Could not find cell for insertion")
+                                if start_index is None:
+                                    logger.warning(f"Could not find start index for table {table_idx + 1}, row {row_idx}, col {col_idx}")
                 
-                logger.info(f"Successfully populated {total_cells} cells in table {table_idx + 1}")
+                # Execute all inserts in one batch
+                if batch_requests:
+                    logger.info(f"Batching {len(batch_requests)} cell insertions for table {table_idx + 1}...")
+                    if self._execute_with_retry(doc_id, batch_requests):
+                        logger.info(f"Successfully inserted {len(batch_requests)} cells in table {table_idx + 1}")
+                    else:
+                        logger.warning(f"Failed to insert cells for table {table_idx + 1} after retries")
+                        # Continue to next table even if this one failed
+                        continue
+                    
+                    # Wait a bit before formatting to avoid rate limits
+                    time.sleep(2)
+                    
+                    # Now batch all formatting requests (bold headers)
+                    format_requests = []
+                    for cell_info in cell_locations:
+                        if cell_info['is_header'] and cell_info['text']:
+                            format_requests.append({
+                                'updateTextStyle': {
+                                    'range': {
+                                        'startIndex': cell_info['start'],
+                                        'endIndex': cell_info['end']
+                                    },
+                                    'textStyle': {
+                                        'bold': True
+                                    },
+                                    'fields': 'bold'
+                                }
+                            })
+                    
+                    # Execute formatting in batches of 20 to stay under rate limits
+                    batch_size = 20
+                    for i in range(0, len(format_requests), batch_size):
+                        batch = format_requests[i:i + batch_size]
+                        logger.info(f"Formatting batch {i // batch_size + 1} for table {table_idx + 1} ({len(batch)} requests)...")
+                        if self._execute_with_retry(doc_id, batch):
+                            logger.info(f"Successfully formatted batch {i // batch_size + 1}")
+                        else:
+                            logger.warning(f"Failed to format batch {i // batch_size + 1} after retries")
+                        
+                        # Wait between formatting batches
+                        if i + batch_size < len(format_requests):
+                            time.sleep(2)
+                    
+                    logger.info(f"Successfully populated table {table_idx + 1} ({len(batch_requests)} cells)")
+                else:
+                    logger.warning(f"No cells to populate for table {table_idx + 1}")
+            
+            logger.info("All tables populated successfully")
         
         except Exception as e:
             logger.error(f"Error populating tables: {e}")
@@ -671,8 +746,8 @@ class DocumentBuilder:
                         }
                     })
             
-            # Apply "## AI Insights" header formatting  
-            ai_insights_pattern = re.compile(r'^AI Insights\s*$', re.MULTILINE)
+            # Apply "## AI Summary and Insights" header formatting  
+            ai_insights_pattern = re.compile(r'^AI Summary and Insights\s*$', re.MULTILINE)
             ai_match = ai_insights_pattern.search(text_content)
             if ai_match:
                 ai_text = ai_match.group(0)
