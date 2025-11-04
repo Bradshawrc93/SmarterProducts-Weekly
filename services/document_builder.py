@@ -115,7 +115,7 @@ class DocumentBuilder:
                 logger.info(f"Found existing document: {doc_title} (ID: {doc_id})")
                 return doc_id
             else:
-                logger.info(f"No existing document found with title: {doc_title} in folder {folder_id}")
+                logger.info(f"No existing document found with title: {doc_title}")
                 return None
                 
         except Exception as e:
@@ -368,7 +368,7 @@ class DocumentBuilder:
             logger.error(f"Error populating document: {e}")
             raise
     
-    def _execute_with_retry(self, doc_id: str, requests_list: list, max_retries: int = 3):
+    def _execute_with_retry(self, doc_id: str, requests_list: list, max_retries: int = 5):
         """
         Execute batch update with retry logic and exponential backoff for rate limits
         
@@ -389,7 +389,7 @@ class DocumentBuilder:
                 return True
             except HttpError as e:
                 if e.resp.status == 429:  # Rate limit error
-                    wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                    wait_time = (2 ** attempt) * 3  # Exponential backoff: 3s, 6s, 12s, 24s, 48s
                     logger.warning(f"Rate limit hit (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                     if attempt == max_retries - 1:
@@ -476,7 +476,7 @@ class DocumentBuilder:
                 
                 # Add delay between table creation to avoid rate limits
                 if table_idx > 0:
-                    time.sleep(3)
+                    time.sleep(5)  # Increased delay to avoid rate limits during table creation
             
             # Now populate all tables with batched operations
             logger.info("Populating table cells with batched operations...")
@@ -484,9 +484,11 @@ class DocumentBuilder:
                 table_data = table_info['table_data']
                 logger.info(f"Processing table {table_idx + 1}: {len(table_data)} rows, {len(table_data[0]) if table_data else 0} cols")
                 
-                # Add delay between tables to avoid rate limits
+                # Add delay between tables to avoid rate limits (longer delay as we go)
                 if table_idx > 0:
-                    time.sleep(5)  # Increased delay between tables
+                    delay = 8 + (table_idx * 2)  # Progressive delay: 8s, 10s, 12s
+                    logger.info(f"Waiting {delay}s before processing table {table_idx + 1} to avoid rate limits...")
+                    time.sleep(delay)
                 
                 # Get current document structure
                 doc = self.docs_service.documents().get(documentId=doc_id).execute()
@@ -527,45 +529,32 @@ class DocumentBuilder:
                             if col_idx < len(table_cells):
                                 cell = table_cells[col_idx]
                                 # Get the start index from the first paragraph in the cell
-                                # Empty cells have paragraphs but no textRun elements, so we need to use the paragraph's startIndex
                                 start_index = None
                                 for content_item in cell.get('content', []):
                                     if 'paragraph' in content_item:
-                                        # First try to get startIndex from the content_item itself (for empty paragraphs)
-                                        para_start = content_item.get('startIndex')
-                                        if para_start is not None:
-                                            # For empty paragraphs, insert at startIndex + 1 to skip the paragraph marker
-                                            start_index = para_start + 1
-                                        
-                                        # Also check for textRun elements (for cells that already have content)
                                         para = content_item['paragraph']
-                                        para_elements = para.get('elements', [])
-                                        if para_elements:
-                                            for para_element in para_elements:
-                                                if 'textRun' in para_element:
-                                                    text_run_start = para_element.get('startIndex')
-                                                    if text_run_start is not None:
-                                                        start_index = text_run_start
-                                                        break
-                                        
+                                        for para_element in para.get('elements', []):
+                                            if 'textRun' in para_element:
+                                                start_index = para_element.get('startIndex')
+                                                if start_index is not None:
+                                                    # Add insert text request
+                                                    batch_requests.append({
+                                                        'insertText': {
+                                                            'location': {'index': start_index},
+                                                            'text': cell_text
+                                                        }
+                                                    })
+                                                    
+                                                    # Store location for formatting
+                                                    cell_locations.append({
+                                                        'start': start_index,
+                                                        'end': start_index + len(cell_text),
+                                                        'text': cell_text,
+                                                        'is_header': row_idx == 0
+                                                    })
+                                                    break
                                         if start_index is not None:
-                                            # Add insert text request
-                                            batch_requests.append({
-                                                'insertText': {
-                                                    'location': {'index': start_index},
-                                                    'text': cell_text
-                                                }
-                                            })
-                                            
-                                            # Store location for formatting
-                                            cell_locations.append({
-                                                'start': start_index,
-                                                'end': start_index + len(cell_text),
-                                                'text': cell_text,
-                                                'is_header': row_idx == 0
-                                            })
                                             break
-                                
                                 if start_index is None:
                                     logger.warning(f"Could not find start index for table {table_idx + 1}, row {row_idx}, col {col_idx}")
                 
