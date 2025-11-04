@@ -175,9 +175,7 @@ class ContentGenerator:
                     team_info["google_sheet_data"] = team_sheet_data
                     team_info["team_name"] = extracted_team_name  # Use team name from sheet instead of board key
                     matched_sheets.add(matched_sheet_id)
-                    logger.info(f"Matched Jira board '{board_key}' to sheet '{extracted_team_name}' with data fields: {list(team_sheet_data.keys())}")
                 else:
-                    logger.warning(f"No matching sheet found for Jira board '{board_key}' - using Jira data only")
                     # If no matching sheet found, try to create a readable name from board key
                     # Map common board keys to team names
                     board_key_mapping = {
@@ -341,45 +339,18 @@ class ContentGenerator:
         """
         Find Google Sheets data that matches a Jira board key
         
-        Uses board key mapping to match board keys (like SMRTRR) to team names (like SmarterAR)
-        then matches against the team name extracted from sheet titles.
-        
         Returns:
             Tuple of (sheet_data_dict, matched_sheet_id, team_name) or ({}, None, None) if no match
         """
-        # Map board keys to team names for better matching
-        board_key_mapping = {
-            "SMR": "SmarterPosting",
-            "SMRTRR": "SmarterAR", 
-            "SMRTRTH": "SmarterAuth",
-            "SMRTRCDNG": "SmarterCoding"
-        }
-        
-        # Get the team name from the board key mapping, or use the board key itself
-        expected_team_name = board_key_mapping.get(jira_board_key, jira_board_key)
-        expected_team_name_lower = expected_team_name.lower()
-        
         for sheet_id, sheet_data in sheets_data.items():
             sheet_title = sheet_data.get("title", "")
-            # Extract team name from sheet title
-            extracted_team_name = self._extract_team_name_from_sheet_title(sheet_title)
-            extracted_team_name_lower = extracted_team_name.lower()
-            
-            # Try multiple matching strategies:
-            # 1. Match by team name (e.g., "SmarterAR" from sheet matches "SmarterAR" from board key mapping)
-            # 2. Match by board key directly (e.g., "SMRTRR" in sheet title)
-            # 3. Match by team name in board key (e.g., "SmarterAR" in "SMRTRR" sheet)
-            # 4. Match by board key in sheet title or tabs
-            
-            if (extracted_team_name_lower == expected_team_name_lower or
-                jira_board_key.lower() in sheet_title.lower() or 
+            # Simple matching - look for board key in sheet title or vice versa
+            if (jira_board_key.lower() in sheet_title.lower() or 
                 sheet_title.lower() in jira_board_key.lower() or
-                expected_team_name_lower in sheet_title.lower() or
-                extracted_team_name_lower in jira_board_key.lower() or
                 any(jira_board_key.lower() in tab_name.lower() for tab_name in sheet_data.get("tabs", {}).keys())):
-                # Use the extracted team name from the sheet as it's more accurate
-                return (self._extract_sheet_team_data(sheet_data), sheet_id, extracted_team_name)
-        
+                # Extract team name from sheet title
+                team_name = self._extract_team_name_from_sheet_title(sheet_title)
+                return (self._extract_sheet_team_data(sheet_data), sheet_id, team_name)
         return ({}, None, None)
 
     def _extract_sheet_team_data(self, sheet_data: Dict) -> Dict:
@@ -427,18 +398,7 @@ class ContentGenerator:
                 first_row = rows[0]
                 for field, index in header_indices.items():
                     if index < len(first_row):
-                        value = first_row[index].strip() if first_row[index] else ""
-                        if value:  # Only add non-empty values
-                            team_data[field] = value
-                
-                # Log what was extracted for debugging
-                if team_data:
-                    logger.info(f"Extracted sheet data from tab '{tab_name}': {list(team_data.keys())}")
-            else:
-                if not rows:
-                    logger.warning(f"No rows found in tab '{tab_name}' for sheet data extraction")
-                if not header_indices:
-                    logger.warning(f"No matching headers found in tab '{tab_name}' (headers: {headers})")
+                        team_data[field] = first_row[index]
         
         return team_data
     

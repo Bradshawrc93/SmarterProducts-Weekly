@@ -111,10 +111,7 @@ def test_connections():
 def generate_weekly_doc():
     """
     Generate Google Doc report (can be run manually or on Tuesday evening)
-    
-    This creates the Google Doc report. PDF generation and email sending are handled separately.
-    - Use 'test-pdf-email' to generate and optionally test email with PDF
-    - Use 'run-final-distribution' to generate PDF for manual email distribution
+    This function only creates the Google Doc - no PDF or email
     """
     logger.info("🚀 Starting weekly Google Doc generation...")
     
@@ -195,7 +192,15 @@ Total Sheet Rows: {sheets_data.get('summary', {}).get('total_rows', 0)}
         # Step 4: Save document info
         state_manager.save_doc_id(doc_id, doc_url, "doc_generation")
         
-        # Note: Email notifications are disabled - PDF can be generated manually using test-pdf-email command
+        # Step 5: Send preview notification
+        logger.info("📧 Sending preview notification...")
+        notification_service = NotificationService()
+        notification_sent = notification_service.send_preview_notification(doc_url)
+        
+        if notification_sent:
+            logger.info("✅ Preview notification sent successfully")
+        else:
+            logger.warning("⚠️ Preview notification failed to send")
         
         # Log successful completion
         status = "completed_with_errors" if errors else "completed"
@@ -206,6 +211,7 @@ Total Sheet Rows: {sheets_data.get('summary', {}).get('total_rows', 0)}
                 "end_time": datetime.now().isoformat(),
                 "doc_id": doc_id,
                 "doc_url": doc_url,
+                "notification_sent": notification_sent,
                 "errors_found": len(errors),
                 "errors": errors,
                 "data_summary": {
@@ -239,7 +245,19 @@ Total Sheet Rows: {sheets_data.get('summary', {}).get('total_rows', 0)}
             }
         )
         
-        # Note: Error notifications are disabled - check logs for errors
+        # Send error notification
+        try:
+            notification_service = NotificationService()
+            notification_service.send_error_notification(
+                error=error_msg,
+                context={
+                    "job_type": "doc_generation",
+                    "timestamp": datetime.now().isoformat(),
+                    "error_details": str(e)
+                }
+            )
+        except Exception as notification_error:
+            logger.error(f"Failed to send error notification: {notification_error}")
         
         return False
 
@@ -254,13 +272,10 @@ def run_preview_generation():
 @cli.command()
 def run_final_distribution():
     """
-    Generate PDF for manual distribution (Wednesday morning job)
-    
-    Note: This generates the PDF but does not send emails automatically.
-    You can manually email the PDF using your preferred email client.
-    Use the test-pdf-email command if you want to test email functionality.
+    Generate and distribute final report (Wednesday morning job)
+    This command will be executed by Heroku Scheduler
     """
-    logger.info("🚀 Starting PDF generation for manual distribution...")
+    logger.info("🚀 Starting final report distribution...")
     
     state_manager = StateManager()
     
@@ -292,11 +307,19 @@ def run_final_distribution():
         document_builder = DocumentBuilder()
         pdf_data = document_builder.export_doc_as_pdf(doc_id)
         
-        logger.info(f"✅ PDF export completed successfully ({len(pdf_data)} bytes)")
-        logger.info(f"📄 Google Doc URL: {doc_url}")
-        logger.info("📧 Note: Email sending is disabled. Please manually email the PDF.")
+        logger.info("✅ PDF export completed successfully")
         
-        # Step 3: Save final job info
+        # Step 3: Send final report with PDF attachment
+        logger.info("📧 Sending final report with PDF...")
+        notification_service = NotificationService()
+        report_sent = notification_service.send_final_report(pdf_data, doc_url)
+        
+        if report_sent:
+            logger.info("✅ Final report sent successfully")
+        else:
+            logger.warning("⚠️ Final report failed to send")
+        
+        # Step 4: Save final job info
         state_manager.save_doc_id(doc_id, doc_url, "final")
         
         # Log successful completion
@@ -307,13 +330,12 @@ def run_final_distribution():
                 "end_time": datetime.now().isoformat(),
                 "doc_id": doc_id,
                 "doc_url": doc_url,
-                "pdf_size_bytes": len(pdf_data),
-                "note": "Email sending disabled - manual distribution"
+                "report_sent": report_sent,
+                "pdf_size_bytes": len(pdf_data)
             }
         )
         
-        logger.info("🎉 PDF generation completed successfully!")
-        logger.info("💡 You can use 'test-pdf-email' command to test email functionality if needed.")
+        logger.info("🎉 Final report distribution completed successfully!")
         return True
         
     except Exception as e:
@@ -332,125 +354,20 @@ def run_final_distribution():
             }
         )
         
-        # Note: Error notifications are disabled - check logs for errors
+        # Send error notification
+        try:
+            notification_service = NotificationService()
+            notification_service.send_error_notification(
+                error=error_msg,
+                context={
+                    "job_type": "final",
+                    "timestamp": datetime.now().isoformat(),
+                    "error_details": str(e)
+                }
+            )
+        except Exception as notification_error:
+            logger.error(f"Failed to send error notification: {notification_error}")
         
-        return False
-
-
-@cli.command()
-@click.option('--doc-id', help='Google Doc ID to use (optional - will find most recent if not provided)')
-@click.option('--email', multiple=True, help='Email address(es) to send to (optional - uses settings if not provided)')
-@click.option('--no-send', is_flag=True, help='Generate PDF but do not send email (for testing)')
-def test_pdf_email(doc_id, email, no_send):
-    """
-    Generate PDF from Google Doc and optionally send via email
-    
-    This command allows you to:
-    - Generate a PDF from an existing Google Doc
-    - Optionally email the PDF (if --no-send is not used)
-    - Works independently of the main report generation workflow
-    
-    Note: For regular workflow, PDFs are generated manually and emailed separately.
-    
-    Examples:
-        # Generate PDF only (no email)
-        python manage.py test-pdf-email --no-send
-        
-        # Use most recent doc and send to default recipients
-        python manage.py test-pdf-email
-        
-        # Use specific doc ID and send to specific email
-        python manage.py test-pdf-email --doc-id 1DURpBMshs4yWsm6riE_jEa4c7ov6Ff86aOy0YuHsIaI --email your@email.com
-    """
-    logger.info("🚀 Testing PDF generation and email functionality...")
-    
-    try:
-        document_builder = DocumentBuilder()
-        notification_service = NotificationService()
-        
-        # Step 1: Get or find the document ID
-        if doc_id:
-            logger.info(f"📄 Using provided doc ID: {doc_id}")
-            target_doc_id = doc_id
-            doc_url = document_builder.get_document_link(target_doc_id)
-        else:
-            logger.info("📄 Looking for most recent document...")
-            state_manager = StateManager()
-            
-            # Try to get from state manager first
-            target_doc_id = state_manager.get_doc_id(job_type="doc_generation")
-            if not target_doc_id:
-                target_doc_id = state_manager.get_doc_id(job_type="preview")
-            
-            if target_doc_id:
-                logger.info(f"✅ Found doc ID from state manager: {target_doc_id}")
-                doc_url = state_manager.get_doc_url(job_type="doc_generation")
-                if not doc_url:
-                    doc_url = state_manager.get_doc_url(job_type="preview")
-                if not doc_url:
-                    doc_url = document_builder.get_document_link(target_doc_id)
-            else:
-                # Try to find most recent doc in Google Drive
-                logger.info("📄 Searching for most recent report in Google Drive...")
-                # Use the report name generation method via reflection or create a public method
-                # For now, we'll construct the report name manually
-                from datetime import datetime, timedelta
-                today = datetime.now()
-                days_until_wednesday = (2 - today.weekday()) % 7
-                if days_until_wednesday == 0 and today.weekday() > 2:
-                    days_until_wednesday = 7
-                wednesday = today + timedelta(days=days_until_wednesday)
-                formatted_date = wednesday.strftime("%-m/%-d/%y")
-                report_name = f"Weekly Product Team Report {formatted_date}"
-                folder_id = settings.google_drive_folder_id
-                target_doc_id = document_builder._find_existing_doc(report_name, folder_id)
-                
-                if target_doc_id:
-                    logger.info(f"✅ Found most recent doc: {target_doc_id}")
-                    doc_url = document_builder.get_document_link(target_doc_id)
-                else:
-                    raise Exception("Could not find a document. Please provide --doc-id or run generate-weekly-doc first.")
-        
-        logger.info(f"📄 Using document: {doc_url}")
-        
-        # Step 2: Export Google Doc as PDF
-        logger.info("📄 Exporting Google Doc as PDF...")
-        pdf_data = document_builder.export_doc_as_pdf(target_doc_id)
-        
-        logger.info(f"✅ PDF export completed successfully ({len(pdf_data)} bytes)")
-        
-        # Step 3: Send email if not disabled
-        if no_send:
-            logger.info("📧 Email sending disabled (--no-send flag)")
-            logger.info(f"✅ PDF generated successfully ({len(pdf_data)} bytes)")
-            logger.info(f"📄 Google Doc URL: {doc_url}")
-            logger.info("💡 You can manually email the PDF using your email client")
-        else:
-            # Determine recipients
-            if email:
-                recipients = list(email)
-                logger.info(f"📧 Sending to specified recipients: {recipients}")
-            else:
-                recipients = None  # Will use default from settings
-                logger.info("📧 Using default recipients from settings")
-            
-            # Send email with PDF
-            logger.info("📧 Sending email with PDF attachment...")
-            report_sent = notification_service.send_final_report(pdf_data, doc_url, recipients=recipients)
-            
-            if report_sent:
-                logger.info("✅ Email sent successfully!")
-                logger.info(f"📧 Email sent to: {recipients if email else 'default recipients from settings'}")
-            else:
-                logger.warning("⚠️ Email failed to send")
-        
-        logger.info("🎉 PDF generation completed!")
-        return True
-        
-    except Exception as e:
-        error_msg = f"PDF and email test failed: {e}"
-        logger.error(error_msg)
-        logger.error(traceback.format_exc())
         return False
 
 
