@@ -586,20 +586,9 @@ class DocumentBuilder:
                             logger.info(f"Inserted {len(row_requests)} cells for row {row_idx + 1}")
                         time.sleep(0.5)  # Small delay between rows
                 
-                # Now format headers if we have cell_locations
+                # Now format headers after all rows are inserted
                 if cell_locations:
-                    logger.info(f"Batching {len(batch_requests)} cell insertions for table {table_idx + 1}...")
-                    if self._execute_with_retry(doc_id, batch_requests):
-                        logger.info(f"Successfully inserted {len(batch_requests)} cells in table {table_idx + 1}")
-                    else:
-                        logger.warning(f"Failed to insert cells for table {table_idx + 1} after retries")
-                        # Continue to next table even if this one failed
-                        continue
-                    
-                    # Wait a bit before formatting to avoid rate limits
-                    time.sleep(2)
-                    
-                    # Now batch all formatting requests (bold headers)
+                    time.sleep(1)
                     format_requests = []
                     for cell_info in cell_locations:
                         if cell_info['is_header'] and cell_info['text']:
@@ -617,22 +606,15 @@ class DocumentBuilder:
                             })
                     
                     # Execute formatting in batches of 20 to stay under rate limits
-                    batch_size = 20
-                    for i in range(0, len(format_requests), batch_size):
-                        batch = format_requests[i:i + batch_size]
-                        logger.info(f"Formatting batch {i // batch_size + 1} for table {table_idx + 1} ({len(batch)} requests)...")
-                        if self._execute_with_retry(doc_id, batch):
-                            logger.info(f"Successfully formatted batch {i // batch_size + 1}")
-                        else:
-                            logger.warning(f"Failed to format batch {i // batch_size + 1} after retries")
-                        
-                        # Wait between formatting batches
-                        if i + batch_size < len(format_requests):
-                            time.sleep(2)
+                    if format_requests:
+                        batch_size = 20
+                        for i in range(0, len(format_requests), batch_size):
+                            batch = format_requests[i:i + batch_size]
+                            if self._execute_with_retry(doc_id, batch):
+                                logger.info(f"Formatted {len(batch)} header cells for table {table_idx + 1}")
+                            time.sleep(1)
                     
-                    logger.info(f"Successfully populated table {table_idx + 1} ({len(batch_requests)} cells)")
-                else:
-                    logger.warning(f"No cells to populate for table {table_idx + 1}")
+                    logger.info(f"Successfully populated table {table_idx + 1}")
             
             logger.info("All tables populated successfully")
         
