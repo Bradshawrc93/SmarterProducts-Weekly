@@ -509,45 +509,44 @@ class DocumentBuilder:
                 num_cols = len(table_data[0]) if table_data else 0
                 cell_locations = []  # Store (start_index, end_index, text, is_header) for formatting
                 
-                # Process each row separately to ensure correct indices
+                # Process each cell individually to ensure correct indices
                 for row_idx in range(len(table_data)):
                     row_data = table_data[row_idx]
                     
-                    # Get fresh document structure for each row
-                    doc = self.docs_service.documents().get(documentId=doc_id).execute()
-                    # Find the target table again
-                    table_count = 0
-                    target_table_element = None
-                    for element in doc.get('body', {}).get('content', []):
-                        if 'table' in element:
-                            if table_count == table_idx:
-                                target_table_element = element.get('table', {})
-                                break
-                            table_count += 1
-                    
-                    if not target_table_element:
-                        break
-                    
-                    # Get this specific row
-                    table_rows = target_table_element.get('tableRows', [])
-                    if row_idx >= len(table_rows):
-                        continue
-                    
-                    row = table_rows[row_idx]
-                    table_cells = row.get('tableCells', [])
-                    
-                    # Build requests for this row
-                    row_requests = []
                     for col_idx in range(num_cols):
+                        # Get fresh document structure for each cell
+                        doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                        # Find the target table again
+                        table_count = 0
+                        target_table_element = None
+                        for element in doc.get('body', {}).get('content', []):
+                            if 'table' in element:
+                                if table_count == table_idx:
+                                    target_table_element = element.get('table', {})
+                                    break
+                                table_count += 1
+                        
+                        if not target_table_element:
+                            break
+                        
+                        # Get this specific row and cell
+                        table_rows = target_table_element.get('tableRows', [])
+                        if row_idx >= len(table_rows):
+                            continue
+                        
+                        row = table_rows[row_idx]
+                        table_cells = row.get('tableCells', [])
+                        if col_idx >= len(table_cells):
+                            continue
+                        
+                        cell = table_cells[col_idx]
+                        
+                        # Get cell text
                         if col_idx >= len(row_data):
                             cell_text = ""
                         else:
                             cell_text = str(row_data[col_idx]) if row_data[col_idx] is not None else ""
                         
-                        if col_idx >= len(table_cells):
-                            continue
-                        
-                        cell = table_cells[col_idx]
                         # Get the start index from the first paragraph in the cell
                         start_index = None
                         for content_item in cell.get('content', []):
@@ -565,26 +564,25 @@ class DocumentBuilder:
                                         start_index = start_index + 1  # Skip paragraph marker
                                 
                                 if start_index is not None:
-                                    row_requests.append({
-                                        'insertText': {
-                                            'location': {'index': start_index},
-                                            'text': cell_text
-                                        }
-                                    })
-                                    
-                                    cell_locations.append({
-                                        'start': start_index,
-                                        'end': start_index + len(cell_text),
-                                        'text': cell_text,
-                                        'is_header': row_idx == 0
-                                    })
                                     break
-                    
-                    # Execute inserts for this row
-                    if row_requests:
-                        if self._execute_with_retry(doc_id, row_requests):
-                            logger.info(f"Inserted {len(row_requests)} cells for row {row_idx + 1}")
-                        time.sleep(0.5)  # Small delay between rows
+                        
+                        # Insert this cell's text
+                        if start_index is not None:
+                            request = [{
+                                'insertText': {
+                                    'location': {'index': start_index},
+                                    'text': cell_text
+                                }
+                            }]
+                            
+                            if self._execute_with_retry(doc_id, request):
+                                cell_locations.append({
+                                    'start': start_index,
+                                    'end': start_index + len(cell_text),
+                                    'text': cell_text,
+                                    'is_header': row_idx == 0
+                                })
+                            time.sleep(0.2)  # Small delay between cells
                 
                 # Now format headers after all rows are inserted
                 if cell_locations:
