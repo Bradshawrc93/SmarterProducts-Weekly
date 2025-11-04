@@ -365,10 +365,11 @@ class ContentGenerator:
             if not rows:
                 continue
             
-            # Map common column names to our expected fields
-            column_mapping = {
+            # Map label patterns (from column 0) to our expected fields
+            # The sheets use a label-value structure where labels are in column 0 and values in column 1
+            label_mapping = {
                 "general update": "general_update",
-                "general_update": "general_update", 
+                "general_update": "general_update",
                 "update": "general_update",
                 "key wins": "key_wins",
                 "key_wins": "key_wins",
@@ -386,19 +387,61 @@ class ContentGenerator:
                 "sentiment": "general_sentiment"
             }
             
-            # Create header index mapping
-            header_indices = {}
-            for i, header in enumerate(headers):
-                clean_header = header.lower().strip()
-                if clean_header in column_mapping:
-                    header_indices[column_mapping[clean_header]] = i
+            # Try label-value structure first (labels in column 0, values in column 1)
+            for row in rows:
+                if len(row) >= 2:
+                    label = row[0].strip() if row[0] else ""
+                    value = row[1].strip() if len(row) > 1 and row[1] else ""
+                    
+                    if not label or not value:
+                        continue
+                    
+                    # Clean and check the label against our mapping
+                    clean_label = label.lower()
+                    # Remove common suffixes like "(1-3 Sentences)" or "(Optional one sentence)"
+                    clean_label = re.sub(r'\s*\([^)]+\)\s*$', '', clean_label).strip()
+                    
+                    for label_pattern, field_name in label_mapping.items():
+                        if label_pattern in clean_label:
+                            team_data[field_name] = value
+                            break
             
-            # Extract data from first row (assuming single team per sheet)
-            if rows and header_indices:
-                first_row = rows[0]
-                for field, index in header_indices.items():
-                    if index < len(first_row):
-                        team_data[field] = first_row[index]
+            # If we didn't find data using label-value structure, try traditional header-row structure
+            if not team_data and rows:
+                # Map common column names to our expected fields
+                column_mapping = {
+                    "general update": "general_update",
+                    "general_update": "general_update", 
+                    "update": "general_update",
+                    "key wins": "key_wins",
+                    "key_wins": "key_wins",
+                    "wins": "key_wins",
+                    "next week focus": "next_week_focus",
+                    "next_week_focus": "next_week_focus",
+                    "focus": "next_week_focus",
+                    "next week": "next_week_focus",
+                    "risk": "risk",
+                    "risks": "risk",
+                    "blockers": "blockers",
+                    "blocker": "blockers",
+                    "general sentiment": "general_sentiment",
+                    "general_sentiment": "general_sentiment",
+                    "sentiment": "general_sentiment"
+                }
+                
+                # Create header index mapping
+                header_indices = {}
+                for i, header in enumerate(headers):
+                    clean_header = header.lower().strip()
+                    if clean_header in column_mapping:
+                        header_indices[column_mapping[clean_header]] = i
+                
+                # Extract data from first row
+                if header_indices:
+                    first_row = rows[0]
+                    for field, index in header_indices.items():
+                        if index < len(first_row):
+                            team_data[field] = first_row[index]
         
         return team_data
     
