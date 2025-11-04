@@ -1,22 +1,94 @@
 """
-Notification Service - Email Integration
+Notification Service - Email Integration via SMTP
 """
 import logging
 from typing import List, Optional
 from datetime import datetime
-import base64
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
 class NotificationService:
-    """Handles email notifications via SendGrid"""
+    """Handles email notifications via SMTP"""
     
     def __init__(self):
-        self.sendgrid_client = SendGridAPIClient(api_key=settings.sendgrid_api_key)
+        # SMTP configuration from settings
+        self.smtp_server = getattr(settings, 'smtp_server', 'smtp.gmail.com')
+        self.smtp_port = getattr(settings, 'smtp_port', 587)
+        self.smtp_username = getattr(settings, 'smtp_username', None)
+        self.smtp_password = getattr(settings, 'smtp_password', None)
+        self.use_tls = getattr(settings, 'smtp_use_tls', True)
+        
+        # If SMTP username not set, use from_email
+        if not self.smtp_username:
+            self.smtp_username = settings.from_email
+        
+        logger.info(f"SMTP configured: {self.smtp_server}:{self.smtp_port} (TLS: {self.use_tls})")
+    
+    def _send_email_smtp(self, recipients: List[str], subject: str, html_content: str, 
+                         plain_content: str, attachment_data: Optional[bytes] = None, 
+                         attachment_filename: Optional[str] = None) -> bool:
+        """
+        Send email via SMTP
+        
+        Args:
+            recipients: List of recipient email addresses
+            subject: Email subject
+            html_content: HTML email body
+            plain_content: Plain text email body
+            attachment_data: Optional attachment data (bytes)
+            attachment_filename: Optional attachment filename
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create message
+            msg = MIMEMultipart('alternative')
+            msg['From'] = f"{settings.from_name} <{settings.from_email}>"
+            msg['To'] = ', '.join(recipients)
+            msg['Subject'] = subject
+            
+            # Add plain text and HTML parts
+            part1 = MIMEText(plain_content, 'plain')
+            part2 = MIMEText(html_content, 'html')
+            msg.attach(part1)
+            msg.attach(part2)
+            
+            # Add attachment if provided
+            if attachment_data and attachment_filename:
+                attachment = MIMEBase('application', 'pdf')
+                attachment.set_payload(attachment_data)
+                encoders.encode_base64(attachment)
+                attachment.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename= {attachment_filename}'
+                )
+                msg.attach(attachment)
+            
+            # Connect to SMTP server and send
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                if self.use_tls:
+                    server.starttls()
+                
+                if self.smtp_password:
+                    server.login(self.smtp_username, self.smtp_password)
+                
+                server.send_message(msg)
+                logger.info(f"Email sent successfully via SMTP to {', '.join(recipients)}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error sending email via SMTP: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
     
     def send_preview_notification(self, doc_link: str, recipients: Optional[List[str]] = None) -> bool:
         """
@@ -100,31 +172,14 @@ Please review the report and make any necessary edits. The final PDF version wil
 Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
             """
             
-            # Send to each recipient
-            success_count = 0
-            for recipient in recipients:
-                try:
-                    message = Mail(
-                        from_email=(settings.from_email, settings.from_name),
-                        to_emails=recipient,
-                        subject=subject,
-                        html_content=html_content,
-                        plain_text_content=plain_content
-                    )
-                    
-                    response = self.sendgrid_client.send(message)
-                    
-                    if response.status_code in [200, 202]:
-                        success_count += 1
-                        logger.info(f"Preview notification sent successfully to {recipient}")
-                    else:
-                        logger.error(f"Failed to send preview notification to {recipient}: {response.status_code}")
-                        
-                except Exception as e:
-                    logger.error(f"Error sending preview notification to {recipient}: {e}")
+            # Send email via SMTP
+            success = self._send_email_smtp(
+                recipients=recipients,
+                subject=subject,
+                html_content=html_content,
+                plain_content=plain_content
+            )
             
-            success = success_count == len(recipients)
-            logger.info(f"Preview notification sent to {success_count}/{len(recipients)} recipients")
             return success
             
         except Exception as e:
@@ -221,42 +276,17 @@ Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
             
             # Prepare PDF attachment
             pdf_filename = f"Weekly_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
-            encoded_pdf = base64.b64encode(pdf_data).decode()
             
-            attachment = Attachment(
-                FileContent(encoded_pdf),
-                FileName(pdf_filename),
-                FileType("application/pdf"),
-                Disposition("attachment")
+            # Send email via SMTP with PDF attachment
+            success = self._send_email_smtp(
+                recipients=recipients,
+                subject=subject,
+                html_content=html_content,
+                plain_content=plain_content,
+                attachment_data=pdf_data,
+                attachment_filename=pdf_filename
             )
             
-            # Send to each recipient
-            success_count = 0
-            for recipient in recipients:
-                try:
-                    message = Mail(
-                        from_email=(settings.from_email, settings.from_name),
-                        to_emails=recipient,
-                        subject=subject,
-                        html_content=html_content,
-                        plain_text_content=plain_content
-                    )
-                    
-                    message.attachment = attachment
-                    
-                    response = self.sendgrid_client.send(message)
-                    
-                    if response.status_code in [200, 202]:
-                        success_count += 1
-                        logger.info(f"Final report sent successfully to {recipient}")
-                    else:
-                        logger.error(f"Failed to send final report to {recipient}: {response.status_code}")
-                        
-                except Exception as e:
-                    logger.error(f"Error sending final report to {recipient}: {e}")
-            
-            success = success_count == len(recipients)
-            logger.info(f"Final report sent to {success_count}/{len(recipients)} recipients")
             return success
             
         except Exception as e:
@@ -332,31 +362,14 @@ Please check the system logs and resolve the issue to ensure the weekly report g
 Timestamp: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
             """
             
-            # Send to each recipient
-            success_count = 0
-            for recipient in recipients:
-                try:
-                    message = Mail(
-                        from_email=(settings.from_email, settings.from_name),
-                        to_emails=recipient,
-                        subject=subject,
-                        html_content=html_content,
-                        plain_text_content=plain_content
-                    )
-                    
-                    response = self.sendgrid_client.send(message)
-                    
-                    if response.status_code in [200, 202]:
-                        success_count += 1
-                        logger.info(f"Error notification sent successfully to {recipient}")
-                    else:
-                        logger.error(f"Failed to send error notification to {recipient}: {response.status_code}")
-                        
-                except Exception as e:
-                    logger.error(f"Error sending error notification to {recipient}: {e}")
+            # Send email via SMTP
+            success = self._send_email_smtp(
+                recipients=recipients,
+                subject=subject,
+                html_content=html_content,
+                plain_content=plain_content
+            )
             
-            success = success_count == len(recipients)
-            logger.info(f"Error notification sent to {success_count}/{len(recipients)} recipients")
             return success
             
         except Exception as e:

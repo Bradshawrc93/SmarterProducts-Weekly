@@ -71,7 +71,16 @@ class Settings(BaseSettings):
     # =============================================================================
     # EMAIL SETTINGS
     # =============================================================================
-    sendgrid_api_key: str = Field(env="SENDGRID_API_KEY")
+    # SMTP Configuration (for sending emails directly from your account)
+    smtp_server: str = Field(default="smtp.gmail.com", env="SMTP_SERVER")
+    smtp_port: int = Field(default=587, env="SMTP_PORT")
+    smtp_username: Optional[str] = Field(default=None, env="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(default=None, env="SMTP_PASSWORD")  # Use App Password for Gmail
+    smtp_use_tls: bool = Field(default=True, env="SMTP_USE_TLS")
+    
+    # Legacy SendGrid (not used anymore, but kept for backward compatibility)
+    sendgrid_api_key: Optional[str] = Field(default=None, env="SENDGRID_API_KEY")
+    
     preview_email_recipients_raw: Optional[str] = Field(default=None, validation_alias="PREVIEW_EMAIL_RECIPIENTS")
     final_email_recipients_raw: Optional[str] = Field(default=None, validation_alias="FINAL_EMAIL_RECIPIENTS")
     from_email: str = Field(env="FROM_EMAIL")
