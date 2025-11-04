@@ -98,7 +98,8 @@ class DocumentBuilder:
         """
         try:
             # Search for documents with this title in the folder (with shared drive support)
-            query = f"name='{doc_title}' and parents in '{folder_id}' and mimeType='application/vnd.google-apps.document'"
+            # Exclude trashed files
+            query = f"name='{doc_title}' and parents in '{folder_id}' and mimeType='application/vnd.google-apps.document' and trashed=false"
             
             results = self.drive_service.files().list(
                 q=query,
@@ -114,7 +115,7 @@ class DocumentBuilder:
                 logger.info(f"Found existing document: {doc_title} (ID: {doc_id})")
                 return doc_id
             else:
-                logger.info(f"No existing document found with title: {doc_title}")
+                logger.info(f"No existing document found with title: {doc_title} in folder {folder_id}")
                 return None
                 
         except Exception as e:
@@ -189,19 +190,15 @@ class DocumentBuilder:
         try:
             # Get current document to find content length
             doc = self.docs_service.documents().get(documentId=doc_id).execute()
-            doc_content = doc.get('body', {}).get('content', [])
+            body = doc.get('body', {})
             
-            # Calculate total content length
-            total_length = 1  # Start at 1 to preserve the document structure
-            for element in doc_content:
-                if 'paragraph' in element:
-                    for text_run in element['paragraph'].get('elements', []):
-                        if 'textRun' in text_run:
-                            total_length += len(text_run['textRun'].get('content', ''))
+            # Get the actual end index from the body (accounts for all content including tables)
+            end_index = body.get('endIndex', 1)
             
-            if total_length > 1:
+            if end_index > 1:
                 # Clear existing content (but keep the first character to preserve document structure)
-                delete_end = total_length - 1
+                # Need to subtract 1 from end_index because it's exclusive
+                delete_end = end_index - 1
                 if delete_end > 1:
                     requests = [{
                         'deleteContentRange': {
@@ -217,9 +214,11 @@ class DocumentBuilder:
                         body={'requests': requests}
                     ).execute()
                     
-                    logger.info("Cleared existing document content")
+                    logger.info(f"Cleared existing document content (deleted range 1-{delete_end})")
                 else:
                     logger.info("Document already empty or nearly empty")
+            else:
+                logger.info("Document already empty")
             
         except Exception as e:
             logger.error(f"Error clearing document content: {e}")
@@ -528,32 +527,45 @@ class DocumentBuilder:
                             if col_idx < len(table_cells):
                                 cell = table_cells[col_idx]
                                 # Get the start index from the first paragraph in the cell
+                                # Empty cells have paragraphs but no textRun elements, so we need to use the paragraph's startIndex
                                 start_index = None
                                 for content_item in cell.get('content', []):
                                     if 'paragraph' in content_item:
+                                        # First try to get startIndex from the content_item itself (for empty paragraphs)
+                                        para_start = content_item.get('startIndex')
+                                        if para_start is not None:
+                                            # For empty paragraphs, insert at startIndex + 1 to skip the paragraph marker
+                                            start_index = para_start + 1
+                                        
+                                        # Also check for textRun elements (for cells that already have content)
                                         para = content_item['paragraph']
-                                        for para_element in para.get('elements', []):
-                                            if 'textRun' in para_element:
-                                                start_index = para_element.get('startIndex')
-                                                if start_index is not None:
-                                                    # Add insert text request
-                                                    batch_requests.append({
-                                                        'insertText': {
-                                                            'location': {'index': start_index},
-                                                            'text': cell_text
-                                                        }
-                                                    })
-                                                    
-                                                    # Store location for formatting
-                                                    cell_locations.append({
-                                                        'start': start_index,
-                                                        'end': start_index + len(cell_text),
-                                                        'text': cell_text,
-                                                        'is_header': row_idx == 0
-                                                    })
-                                                    break
+                                        para_elements = para.get('elements', [])
+                                        if para_elements:
+                                            for para_element in para_elements:
+                                                if 'textRun' in para_element:
+                                                    text_run_start = para_element.get('startIndex')
+                                                    if text_run_start is not None:
+                                                        start_index = text_run_start
+                                                        break
+                                        
                                         if start_index is not None:
+                                            # Add insert text request
+                                            batch_requests.append({
+                                                'insertText': {
+                                                    'location': {'index': start_index},
+                                                    'text': cell_text
+                                                }
+                                            })
+                                            
+                                            # Store location for formatting
+                                            cell_locations.append({
+                                                'start': start_index,
+                                                'end': start_index + len(cell_text),
+                                                'text': cell_text,
+                                                'is_header': row_idx == 0
+                                            })
                                             break
+                                
                                 if start_index is None:
                                     logger.warning(f"Could not find start index for table {table_idx + 1}, row {row_idx}, col {col_idx}")
                 
