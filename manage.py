@@ -206,7 +206,6 @@ Total Sheet Rows: {sheets_data.get('summary', {}).get('total_rows', 0)}
                 "end_time": datetime.now().isoformat(),
                 "doc_id": doc_id,
                 "doc_url": doc_url,
-                "notification_sent": notification_sent,
                 "errors_found": len(errors),
                 "errors": errors,
                 "data_summary": {
@@ -240,19 +239,7 @@ Total Sheet Rows: {sheets_data.get('summary', {}).get('total_rows', 0)}
             }
         )
         
-        # Send error notification
-        try:
-            notification_service = NotificationService()
-            notification_service.send_error_notification(
-                error=error_msg,
-                context={
-                    "job_type": "doc_generation",
-                    "timestamp": datetime.now().isoformat(),
-                    "error_details": str(e)
-                }
-            )
-        except Exception as notification_error:
-            logger.error(f"Failed to send error notification: {notification_error}")
+        # Note: Error notifications are disabled - check logs for errors
         
         return False
 
