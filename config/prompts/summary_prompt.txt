@@ -28,7 +28,7 @@ CRITICAL: The "## AI Summary and Insights" header MUST be formatted as a Header 
 
 **Second Paragraph (and optional Third Paragraph)**: Discuss risks, blockers, dependencies, and operational insights from both Jira and the weekly tracker. Be direct about what the data shows - for example, if a team has low activity in Jira, if there are many blocked work items, if velocity is trending up or down, or operational concerns. Mention work items completed metrics towards the end of this section, not at the beginning. Combine all insights naturally into flowing paragraphs.
 
-[IMPORTANT: Keep this entire section to 2-3 paragraphs maximum. Be concise and factual. Do NOT start with work items completed numbers - those should be mentioned towards the end if relevant.]
+[IMPORTANT: Keep this entire section to 2-3 paragraphs maximum. Be concise and factual. Always reference Jira work items across To Do, In Progress, and Done status groups; treat "Done" items as only those completed during {week_start}–{week_end}. Do NOT start with work items completed numbers - those should be mentioned towards the end if relevant.]
 
 ## Product Team Updates
 
@@ -42,13 +42,13 @@ IMPORTANT:
 - Example: "## Team: SmarterAR" NOT "## Team 1: SmarterAR" or "## 1. Team: SmarterAR"
 - This MUST be a Header 2 format (starts with ##)
 **General Update:**  
-[Refine and improve the readability of the Google Sheet "General Update" - make it flow better and more professional]
+[Refine and improve the readability of the Google Sheet "General Update" - make it flow better and more professional. Incorporate Jira items from the To Do and In Progress lists to describe pipeline and upcoming work.]
 
 **Key Wins:**  
 [Enhance the "Key Wins" from the sheet - make them more impactful and business-focused]
 
 **Next Week Focus:**  
-[Improve the "Next Week Focus" - make priorities clear and actionable]
+[Improve the "Next Week Focus" - make priorities clear and actionable, reinforcing relevant To Do items from Jira as the near-term pipeline.]
 
 **Risks / Blockers:**  
 - [Refine the "Risk" entry from the sheet]  

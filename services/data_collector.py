@@ -87,7 +87,8 @@ class DataCollector:
                 "total_issues": 0,
                 "completed_issues": 0,
                 "in_progress_issues": 0,
-                "blocked_issues": 0
+                "blocked_issues": 0,
+                "to_do_issues": 0
             },
             "collection_timestamp": datetime.now().isoformat(),
             "date_ranges": {
@@ -123,13 +124,40 @@ class DataCollector:
                 board_data = {
                     "issues": [],
                     "stats": {
-                        "total": len(issues),
+                        "total": 0,
                         "completed": 0,
                         "in_progress": 0,
-                        "blocked": 0
+                        "blocked": 0,
+                        "to_do": 0
                     },
-                    "previous_week_completed": 0
+                    "previous_week_completed": 0,
+                    "status_groups": {
+                        "to_do": [],
+                        "in_progress": [],
+                        "completed_this_week": [],
+                        "blocked": []
+                    }
                 }
+
+                issue_map: Dict[str, Dict[str, Any]] = {}
+
+                def _serialize_issue(issue_obj):
+                    description = ""
+                    if hasattr(issue_obj.fields, 'description') and issue_obj.fields.description:
+                        description = issue_obj.fields.description
+                    elif isinstance(issue_obj.fields.description, str):
+                        description = issue_obj.fields.description
+
+                    return {
+                        "key": issue_obj.key,
+                        "summary": issue_obj.fields.summary,
+                        "description": description,
+                        "status": issue_obj.fields.status.name,
+                        "assignee": issue_obj.fields.assignee.displayName if issue_obj.fields.assignee else "Unassigned",
+                        "priority": issue_obj.fields.priority.name if issue_obj.fields.priority else "None",
+                        "updated": issue_obj.fields.updated,
+                        "created": issue_obj.fields.created
+                    }
                 
                 # Get previous week's completed issues for velocity comparison
                 previous_week_start_str = previous_week_start.strftime('%Y-%m-%d')
@@ -171,42 +199,79 @@ class DataCollector:
                         board_data["previous_week_completed"] = 0
                 
                 for issue in issues:
-                    # Get description, handling cases where it might be None
-                    description = ""
-                    if hasattr(issue.fields, 'description') and issue.fields.description:
-                        description = issue.fields.description
-                    elif isinstance(issue.fields.description, str):
-                        description = issue.fields.description
-                    
-                    issue_data = {
-                        "key": issue.key,
-                        "summary": issue.fields.summary,
-                        "description": description,
-                        "status": issue.fields.status.name,
-                        "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "Unassigned",
-                        "priority": issue.fields.priority.name if issue.fields.priority else "None",
-                        "updated": issue.fields.updated,
-                        "created": issue.fields.created
-                    }
-                    
-                    board_data["issues"].append(issue_data)
-                    
-                    # Update stats
-                    status_lower = issue.fields.status.name.lower()
-                    if any(word in status_lower for word in ['done', 'completed', 'closed', 'resolved']):
-                        board_data["stats"]["completed"] += 1
-                        jira_data["summary"]["completed_issues"] += 1
-                    elif any(word in status_lower for word in ['progress', 'development', 'review']):
-                        board_data["stats"]["in_progress"] += 1
-                        jira_data["summary"]["in_progress_issues"] += 1
-                    elif any(word in status_lower for word in ['blocked', 'impediment']):
-                        board_data["stats"]["blocked"] += 1
-                        jira_data["summary"]["blocked_issues"] += 1
-                
+                    issue_map[issue.key] = _serialize_issue(issue)
+
+                # Fetch additional status-based issue groups
+                status_queries = {
+                    "to_do": f"""
+                    project = {board_key}
+                    AND statusCategory = "To Do"
+                    """,
+                    "in_progress": f"""
+                    project = {board_key}
+                    AND statusCategory = "In Progress"
+                    """,
+                    "completed_this_week": f"""
+                    project = {board_key}
+                    AND statusCategory = "Done"
+                    AND status CHANGED TO (Done, Completed, Closed, Resolved)
+                        DURING ("{current_week_start_str}", "{current_week_end_str}")
+                    """
+                }
+
+                status_keys: Dict[str, set] = {
+                    "to_do": set(),
+                    "in_progress": set(),
+                    "completed_this_week": set(),
+                    "blocked": set()
+                }
+
+                for status_label, jql_query in status_queries.items():
+                    try:
+                        status_issues = self.jira_client.search_issues(
+                            jql_query,
+                            maxResults=200,
+                            fields='summary,description,status,assignee,priority,updated,created'
+                        )
+                        for issue in status_issues:
+                            issue_map.setdefault(issue.key, _serialize_issue(issue))
+                            status_keys[status_label].add(issue.key)
+                        logger.info(f"{board_key} - Retrieved {len(status_issues)} issues for status group '{status_label}'")
+                    except Exception as status_error:
+                        logger.warning(f"Could not fetch '{status_label}' issues for {board_key}: {status_error}")
+
+                # Identify blocked issues from the collected set
+                for key, issue_data in issue_map.items():
+                    if 'blocked' in issue_data.get('status', '').lower() or 'impediment' in issue_data.get('status', '').lower():
+                        status_keys["blocked"].add(key)
+
+                # Populate status groups with serialized issue data
+                for status_label in board_data["status_groups"].keys():
+                    board_data["status_groups"][status_label] = [
+                        issue_map[key] for key in status_keys.get(status_label, set())
+                    ]
+
+                # Finalize issues list and stats
+                board_data["issues"] = list(issue_map.values())
+                board_data["stats"]["total"] = len(issue_map)
+                board_data["stats"]["completed"] = len(status_keys["completed_this_week"])
+                board_data["stats"]["in_progress"] = len(status_keys["in_progress"])
+                board_data["stats"]["to_do"] = len(status_keys["to_do"])
+                board_data["stats"]["blocked"] = len(status_keys["blocked"])
+
                 jira_data["boards"][board_key] = board_data
-                jira_data["summary"]["total_issues"] += len(issues)
+                jira_data["summary"]["total_issues"] += board_data["stats"]["total"]
+                jira_data["summary"]["completed_issues"] += board_data["stats"]["completed"]
+                jira_data["summary"]["in_progress_issues"] += board_data["stats"]["in_progress"]
+                jira_data["summary"]["blocked_issues"] += board_data["stats"]["blocked"]
+                jira_data["summary"]["to_do_issues"] += board_data["stats"]["to_do"]
                 
-                logger.info(f"Collected {len(issues)} issues from {board_key} (current week completed: {board_data['stats']['completed']}, previous week: {board_data['previous_week_completed']})")
+                logger.info(
+                    f"Collected {len(board_data['issues'])} total issues from {board_key} "
+                    f"(current week completed: {board_data['stats']['completed']}, "
+                    f"to-do: {board_data['stats']['to_do']}, in progress: {board_data['stats']['in_progress']}, "
+                    f"previous week completed: {board_data['previous_week_completed']})"
+                )
         
         except Exception as e:
             logger.error(f"Error collecting Jira data: {e}")

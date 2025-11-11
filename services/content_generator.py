@@ -98,28 +98,41 @@ class ContentGenerator:
                 # Extract Jira metrics and issue details
                 stats = board_data.get("stats", {})
                 issues = board_data.get("issues", [])
+                status_groups = board_data.get("status_groups", {})
                 previous_week_completed = board_data.get("previous_week_completed", 0)
                 current_week_completed = stats.get('completed', 0)
                 
                 # Calculate velocity trend
                 velocity_trend = self._calculate_velocity_trend(current_week_completed, previous_week_completed)
                 
-                # Filter issues by status categories
-                completed_issues = [issue for issue in issues 
-                                   if any(word in issue.get('status', '').lower() 
-                                         for word in ['done', 'completed', 'closed', 'resolved'])]
-                in_progress_issues = [issue for issue in issues 
-                                     if any(word in issue.get('status', '').lower() 
-                                           for word in ['progress', 'development', 'review'])]
-                blocked_issues = [issue for issue in issues 
-                                if any(word in issue.get('status', '').lower() 
-                                      for word in ['blocked', 'impediment'])]
+                # Filter issues by status categories (prefer pre-grouped data, fallback to detection)
+                completed_issues = status_groups.get("completed_this_week") or [
+                    issue for issue in issues 
+                    if any(word in issue.get('status', '').lower() 
+                           for word in ['done', 'completed', 'closed', 'resolved'])
+                ]
+                in_progress_issues = status_groups.get("in_progress") or [
+                    issue for issue in issues 
+                    if any(word in issue.get('status', '').lower() 
+                           for word in ['progress', 'development', 'review'])
+                ]
+                todo_issues = status_groups.get("to_do") or [
+                    issue for issue in issues 
+                    if any(word in issue.get('status', '').lower() 
+                           for word in ['to do', 'todo', 'selected for development', 'ready'])
+                ]
+                blocked_issues = status_groups.get("blocked") or [
+                    issue for issue in issues 
+                    if any(word in issue.get('status', '').lower() 
+                           for word in ['blocked', 'impediment'])
+                ]
                 new_issues = [issue for issue in issues 
                            if self._is_issue_created_in_period(issue, target_monday, this_tuesday)]
                 
                 team_info["jira_data"] = {
                     "issues_completed": current_week_completed,
                     "issues_in_progress": stats.get('in_progress', 0),
+                    "issues_todo": stats.get('to_do', 0),
                     "new_issues_created": len(new_issues),
                     "total_issues": stats.get('total', 0),
                     "blocked_issues": stats.get('blocked', 0),
@@ -146,6 +159,17 @@ class ContentGenerator:
                             "priority": issue.get('priority')
                         }
                         for issue in in_progress_issues[:10]  # Limit to top 10
+                    ],
+                    "todo_issues_detail": [
+                        {
+                            "key": issue.get('key'),
+                            "summary": issue.get('summary'),
+                            "description": issue.get('description', '')[:200] if issue.get('description') else '',
+                            "status": issue.get('status'),
+                            "assignee": issue.get('assignee'),
+                            "priority": issue.get('priority')
+                        }
+                        for issue in todo_issues[:10]
                     ],
                     "blocked_issues_detail": [
                         {
